@@ -111,6 +111,7 @@ def main():
                 total=len(tokenized_datasets["train"]) // batch_size,
                 desc=f"Epoch {epoch + 1}",
         ):
+            print(batch)
             loss, params, optim_state = train_step(
                 model, params, optim, optim_state, batch
             )
