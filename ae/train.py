@@ -63,7 +63,7 @@ def main():
 
     model, params = init_model(**config["model"])
 
-    dataset = load_dataset(config["data"]["name"], config["data"]["split"])
+    dataset = load_dataset(config["data"]["name"])
     tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
 
     def tokenize_function(examples):
@@ -87,7 +87,7 @@ def main():
     output_dir = config["train"]["output_dir"]
     save_checkpoint_steps = config["train"]["save_checkpoint_steps"]
 
-    indices = np.arange(len(tokenized_datasets["train"]))
+    indices = np.arange(len(tokenized_datasets[config["data"]["split"]]))
     np.random.shuffle(indices)
 
     def data_loader(dataset, batch_size):
