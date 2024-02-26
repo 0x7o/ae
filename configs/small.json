@@ -1,0 +1,33 @@
+{
+  "model": {
+    "d_model": 768,
+    "d_ff": 1024,
+    "n_heads": 12,
+    "n_layers": 12,
+    "vocab_size": 50272,
+    "seq_len": 2048
+  },
+  "data": {
+    "name": "0x7o/GCRL-habr",
+    "text_column": "text",
+    "split": "train",
+    "tokenizer": "0x7o/fialka-13B-v4"
+  },
+  "train": {
+    "batch_size": 8,
+    "n_epochs": 1,
+    "optimizer": {
+      "type": "adam",
+      "params": {
+        "learning_rate": 0.0001
+      }
+    },
+    "scheduler": {
+      "type": "cosine",
+      "warmup_steps": 10000
+    },
+    "clip_grad_norm": 1.0,
+    "output_dir": "ae-small",
+    "save_checkpoint_steps": 1000
+  }
+}
