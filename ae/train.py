@@ -69,10 +69,6 @@ def main():
 
     jax.config.update('jax_platform_name', 'tpu')
 
-    devices = jax.devices()
-    for device in devices:
-        print(device)
-
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -100,15 +96,9 @@ def main():
     indices = np.arange(len(tokenized_datasets[config["data"]["split"]]))
     np.random.shuffle(indices)
 
-    p_train_step = jax.pmap(train_step, axis_name='batch')
-
     def data_loader(dataset, batch_size):
-        num_devices = len(jax.devices())
         for i in range(0, len(dataset), batch_size):
             batch = dataset[i: i + batch_size]
-            if len(batch) % num_devices != 0:
-                padding = num_devices - (len(batch) % num_devices)
-                batch = np.pad(batch, ((0, padding), (0, 0)), mode='constant')
             yield {
                 "input_ids": jnp.array(batch["input_ids"]),
                 "attention_mask": jnp.array(batch["attention_mask"])
@@ -121,7 +111,7 @@ def main():
                 total=len(tokenized_datasets["train"]) // batch_size,
                 desc=f"Epoch {epoch + 1}",
         ):
-            loss, params, optim_state = p_train_step(
+            loss, params, optim_state = train_step(
                 model, params, optim_state, batch
             )
             step += 1
