@@ -53,6 +53,7 @@ def train_step(model, params, optim, optim_state, batch):
 
 
 def main():
+    jax.config.update('jax_platform_name', 'tpu')
     parser = ArgumentParser()
     parser.add_argument(
         "--config", type=str, default="config.json", help="Path to the config file"
@@ -67,10 +68,10 @@ def main():
     dataset = load_dataset(config["data"]["name"])
     tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
 
-    jax.config.update('jax_platform_name', 'tpu')
-
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+
+    print("Devices: ", jax.devices())
 
     def tokenize_function(examples):
         return tokenizer(
@@ -108,7 +109,6 @@ def main():
                 total=len(tokenized_datasets["train"]) // batch_size,
                 desc=f"Epoch {epoch + 1}",
         ):
-            print(batch["input_ids"].shape)
             loss, params, optim_state = train_step(
                 model, params, optim, optim_state, batch
             )
@@ -121,7 +121,7 @@ def main():
                 with open(os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb") as f:
                     pickle.dump(checkpoint, f)
 
-        print(f"Epoch {epoch + 1} completed. Loss: {loss}")
+            print(f"\nLoss: {loss}")
 
     print("Training completed.")
 
