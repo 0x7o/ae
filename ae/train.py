@@ -66,6 +66,9 @@ def main():
     dataset = load_dataset(config["data"]["name"])
     tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
 
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     def tokenize_function(examples):
         return tokenizer(
             examples[config["data"]["text_column"]],
