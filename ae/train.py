@@ -39,13 +39,14 @@ def cross_entropy(logits, targets, axis=-1):
 
 
 def loss_fn(model, params, batch):
-    inp, labels = batch[:, :-1], batch[:, 1:]
+    inputs_ids, attention_mask = batch["input_ids"], batch["attention_mask"]
+    inp, labels = inputs_ids[:, :-1], inputs_ids[:, 1:]
     logits = model.apply(params, inp)
     return cross_entropy(logits, labels, axis=-1)
 
 
 def train_step(model, params, optim, optim_state, batch):
-    loss, grads = jax.value_and_grad(loss_fn)(model, params, batch)
+    loss, grads = jax.value_and_grad(loss_fn, argnums=1)(model, params, batch)
     updates, optim_state = optim.update(grads, optim_state)
     params = optax.apply_updates(params, updates)
     return loss, params, optim_state
@@ -92,9 +93,6 @@ def main():
 
     indices = np.arange(len(tokenized_datasets[config["data"]["split"]]))
     np.random.shuffle(indices)
-
-    # print sample from the dataset
-    print(tokenized_datasets["train"][0])
 
     def data_loader(dataset, batch_size):
         for i in range(0, len(dataset), batch_size):
