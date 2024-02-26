@@ -93,9 +93,16 @@ def main():
     indices = np.arange(len(tokenized_datasets[config["data"]["split"]]))
     np.random.shuffle(indices)
 
+    # print sample from the dataset
+    print(tokenized_datasets["train"][0])
+
     def data_loader(dataset, batch_size):
         for i in range(0, len(dataset), batch_size):
-            yield {k: jnp.array(v) for k, v in dataset[i: i + batch_size].items()}
+            batch = dataset[i: i + batch_size]
+            yield {
+                "input_ids": jnp.array(batch["input_ids"]),
+                "attention_mask": jnp.array(batch["attention_mask"])
+            }
 
     step = 0
     for epoch in range(n_epochs):
