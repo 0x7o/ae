@@ -39,6 +39,7 @@ def cross_entropy(logits, targets, axis=-1):
 
 
 def loss_fn(model, params, batch):
+    print(model)
     inputs_ids, attention_mask = batch["input_ids"], batch["attention_mask"]
     inp, labels = inputs_ids[:, :-1], inputs_ids[:, 1:]
     logits = model.apply(params, inp)
@@ -46,10 +47,11 @@ def loss_fn(model, params, batch):
 
 
 def train_step(model, params, optim, optim_state, batch):
+    print(model)
     loss, grads = jax.value_and_grad(loss_fn, argnums=1)(model, params, batch)
     updates, optim_state = optim.update(grads, optim_state)
     params = optax.apply_updates(params, updates)
-    return loss, params, optim_state
+    return model, loss, params, optim_state
 
 
 def main():
@@ -64,7 +66,6 @@ def main():
         config = json.load(f)
 
     model, params = init_model(**config["model"])
-
     dataset = load_dataset(config["data"]["name"])
     tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
 
@@ -90,7 +91,6 @@ def main():
     n_epochs = config["train"]["n_epochs"]
     output_dir = config["train"]["output_dir"]
     save_checkpoint_steps = config["train"]["save_checkpoint_steps"]
-
     indices = np.arange(len(tokenized_datasets[config["data"]["split"]]))
     np.random.shuffle(indices)
 
@@ -109,7 +109,7 @@ def main():
                 total=len(tokenized_datasets["train"]) // batch_size,
                 desc=f"Epoch {epoch + 1}",
         ):
-            loss, params, optim_state = train_step(
+            model, loss, params, optim_state = train_step(
                 model, params, optim, optim_state, batch
             )
             step += 1
