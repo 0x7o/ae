@@ -92,14 +92,14 @@ def main():
 
     def data_loader(dataset, batch_size):
         for i in range(0, len(dataset), batch_size):
-            yield {k: jnp.array(v) for k, v in dataset[i : i + batch_size].items()}
+            yield {k: jnp.array(v) for k, v in dataset[i: i + batch_size].items()}
 
     step = 0
     for epoch in range(n_epochs):
         for batch in tqdm(
-            data_loader(tokenized_datasets["train"], batch_size),
-            total=len(tokenized_datasets["train"]) // batch_size,
-            desc=f"Epoch {epoch + 1}",
+                data_loader(tokenized_datasets["train"], batch_size),
+                total=len(tokenized_datasets["train"]) // batch_size,
+                desc=f"Epoch {epoch + 1}",
         ):
             loss, params, optim_state = train_step(
                 model, params, optim, optim_state, batch
@@ -116,3 +116,7 @@ def main():
         print(f"Epoch {epoch + 1} completed. Loss: {loss}")
 
     print("Training completed.")
+
+
+if __name__ == "__main__":
+    main()
