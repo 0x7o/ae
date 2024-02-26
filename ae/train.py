@@ -74,10 +74,7 @@ def main():
 
     def tokenize_function(examples):
         return tokenizer(
-            examples[config["data"]["text_column"]],
-            padding="max_length",
-            truncation=True,
-            max_length=config["model"]["seq_len"],
+            examples[config["data"]["text_column"]]
         )
 
     tokenized_datasets = dataset.map(tokenize_function, batched=True)
@@ -111,7 +108,7 @@ def main():
                 total=len(tokenized_datasets["train"]) // batch_size,
                 desc=f"Epoch {epoch + 1}",
         ):
-            print(batch)
+            print(batch["input_ids"].shape)
             loss, params, optim_state = train_step(
                 model, params, optim, optim_state, batch
             )
