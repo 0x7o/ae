@@ -9,7 +9,7 @@
   },
   "data": {
     "name": "Trelis/tiny-shakespeare",
-    "text_column": "text",
+    "text_column": "Text",
     "split": "train",
     "tokenizer": "gpt2"
   },
