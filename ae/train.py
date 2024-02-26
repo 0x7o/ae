@@ -112,7 +112,7 @@ def main():
                 desc=f"Epoch {epoch + 1}",
         ):
             loss, params, optim_state = train_step(
-                model, params, optim_state, batch
+                model, params, optim, optim_state, batch
             )
             step += 1
 
