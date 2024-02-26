@@ -103,8 +103,12 @@ def main():
     p_train_step = jax.pmap(train_step, axis_name='batch')
 
     def data_loader(dataset, batch_size):
+        num_devices = len(jax.devices())
         for i in range(0, len(dataset), batch_size):
             batch = dataset[i: i + batch_size]
+            if len(batch) % num_devices != 0:
+                padding = num_devices - (len(batch) % num_devices)
+                batch = np.pad(batch, ((0, padding), (0, 0)), mode='constant')
             yield {
                 "input_ids": jnp.array(batch["input_ids"]),
                 "attention_mask": jnp.array(batch["attention_mask"])
