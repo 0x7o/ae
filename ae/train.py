@@ -134,8 +134,6 @@ class Trainer:
                 }
 
         run = wandb.init(project="ae-dev", config=self.config)
-        self.train_step = jax.pmap(self.train_step, axis_name='batch')
-
         step = 0
 
         for epoch in range(n_epochs):
