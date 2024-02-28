@@ -8,7 +8,7 @@
     "seq_len": 1024
   },
   "data": {
-    "name": "maxtli/OpenWebText-2M",
+    "name": "pjit",
     "text_column": "text",
     "split": "train",
     "tokenizer": "gpt2"
