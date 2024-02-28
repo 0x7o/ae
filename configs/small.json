@@ -8,7 +8,7 @@
     "seq_len": 1024
   },
   "data": {
-    "name": "pjit",
+    "name": "stas/openwebtext-10k",
     "text_column": "text",
     "split": "train",
     "tokenizer": "gpt2"
