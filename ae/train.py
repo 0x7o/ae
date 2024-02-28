@@ -134,6 +134,7 @@ class Trainer:
                 }
 
         run = wandb.init(project="ae-dev", config=self.config)
+        train_step = jax.pmap(self.train_step, axis_name='batch')
         step = 0
 
         for epoch in range(n_epochs):
@@ -147,7 +148,9 @@ class Trainer:
                 desc=f"Epoch {epoch + 1}",
             ):
                 batch = jax.device_put(batch, self.devices[0])
-                loss, optim_state = self.train_step(optim, optim_state, batch)
+                if jnp.ndim(batch['input_ids']) == 0:
+                    batch['input_ids'] = jnp.expand_dims(batch['input_ids'], 0)
+                loss, optim_state = train_step(optim, optim_state, batch)
 
                 step += 1
 
