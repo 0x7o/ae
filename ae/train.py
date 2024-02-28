@@ -60,7 +60,6 @@ class Trainer:
         logits = self.model.apply(params, inp)
         return self.cross_entropy(logits, labels, axis=-1)
 
-    @jax.jit
     def train_step(self, optim, optim_state, batch):
         loss, grads = jax.value_and_grad(self.loss_fn)(self.params, batch["input_ids"])
         updates, optim_state = optim.update(grads, optim_state)
