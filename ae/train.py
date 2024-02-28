@@ -23,6 +23,7 @@ class Trainer:
         self.devices = jax.devices()
         print("Devices: ", self.devices)
         self.model, self.params = self.init_model(**config["model"])
+        self.params = jax.device_put(self.params, self.devices[0])
         print(f"Model {config['model']} initialized.")
         print(f"{sum(p.size for p in jax.tree_flatten(self.params)[0])} parameters")
         self.dataset = load_dataset(config["data"]["name"])
@@ -149,6 +150,7 @@ class Trainer:
                 total=len(tokenized_datasets["train"]) // batch_size,
                 desc=f"Epoch {epoch + 1}",
             ):
+                batch = jax.device_put(batch, self.devices[0])
                 loss, optim_state = self.train_step(optim, optim_state, batch)
                 step += 1
 
