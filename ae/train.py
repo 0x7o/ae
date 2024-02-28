@@ -20,6 +20,8 @@ from argparse import ArgumentParser
 class Trainer:
     def __init__(self, config):
         self.config = config
+        self.devices = jax.devices()
+        print("Devices: ", self.devices)
         self.model, self.params = self.init_model(**config["model"])
         print(f"Model {config['model']} initialized.")
         print(f"{sum(p.size for p in jax.tree_flatten(self.params)[0])} parameters")
@@ -28,8 +30,6 @@ class Trainer:
 
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        print("Devices: ", jax.devices())
 
     def init_model(self, d_model, d_ff, n_heads, n_layers, vocab_size, seq_len):
         key = jax.random.PRNGKey(0)
@@ -43,6 +43,7 @@ class Trainer:
         )
         x = jnp.ones((1, seq_len), dtype=jnp.int32)
         params = model.init(key, x)
+        params = jax.device_put(params, self.devices[0])
         return model, params
 
     def cross_entropy(self, logits, targets, axis=-1):
@@ -64,7 +65,6 @@ class Trainer:
         updates, optim_state = optim.update(grads, optim_state)
         self.params = optax.apply_updates(self.params, updates)
         return loss, optim_state
-
     def train(self):
         def tokenize_function(examples):
             return self.tokenizer(examples[self.config["data"]["text_column"]])
@@ -134,8 +134,10 @@ class Trainer:
                 }
 
         run = wandb.init(project="ae-dev", config=self.config)
+        self.train_step = jax.pmap(self.train_step, axis_name='batch')
 
         step = 0
+
         for epoch in range(n_epochs):
             for batch in tqdm(
                 data_loader(
@@ -146,7 +148,9 @@ class Trainer:
                 total=len(tokenized_datasets["train"]) // batch_size,
                 desc=f"Epoch {epoch + 1}",
             ):
+                batch = jax.device_put(batch, self.devices[0])
                 loss, optim_state = self.train_step(optim, optim_state, batch)
+
                 step += 1
 
                 if step % save_checkpoint_steps == 0:
