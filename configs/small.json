@@ -17,7 +17,7 @@
     "batch_size": 1,
     "n_epochs": 1,
     "optimizer": {
-      "type": "adam",
+      "type": "adamw",
       "params": {
         "learning_rate": 0.005
       }

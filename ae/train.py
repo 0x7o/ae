@@ -43,7 +43,6 @@ class Trainer:
         )
         x = jnp.ones((1, seq_len), dtype=jnp.int32)
         params = model.init(key, x)
-        params = jax.device_put(params, self.devices[0])
         return model, params
 
     def cross_entropy(self, logits, targets, axis=-1):
@@ -60,11 +59,13 @@ class Trainer:
         logits = self.model.apply(params, inp)
         return self.cross_entropy(logits, labels, axis=-1)
 
+    @jax.jit
     def train_step(self, optim, optim_state, batch):
         loss, grads = jax.value_and_grad(self.loss_fn)(self.params, batch["input_ids"])
         updates, optim_state = optim.update(grads, optim_state)
         self.params = optax.apply_updates(self.params, updates)
         return loss, optim_state
+
     def train(self):
         def tokenize_function(examples):
             return self.tokenizer(examples[self.config["data"]["text_column"]])
@@ -73,6 +74,8 @@ class Trainer:
 
         if self.config["train"]["optimizer"]["type"] == "adam":
             optim = optax.adam(**self.config["train"]["optimizer"]["params"])
+        elif self.config["train"]["optimizer"]["type"] == "adamw":
+            optim = optax.adamw(**self.config["train"]["optimizer"]["params"])
         else:
             raise ValueError("Invalid optimizer type")
 
@@ -134,9 +137,8 @@ class Trainer:
                 }
 
         run = wandb.init(project="ae-dev", config=self.config)
-        train_step = jax.pmap(self.train_step, axis_name='batch')
-        step = 0
 
+        step = 0
         for epoch in range(n_epochs):
             for batch in tqdm(
                 data_loader(
@@ -147,11 +149,7 @@ class Trainer:
                 total=len(tokenized_datasets["train"]) // batch_size,
                 desc=f"Epoch {epoch + 1}",
             ):
-                batch = jax.device_put(batch, self.devices[0])
-                if jnp.ndim(batch['input_ids']) == 0:
-                    batch['input_ids'] = jnp.expand_dims(batch['input_ids'], 0)
-                loss, optim_state = train_step(optim, optim_state, batch)
-
+                loss, optim_state = self.train_step(optim, optim_state, batch)
                 step += 1
 
                 if step % save_checkpoint_steps == 0:
