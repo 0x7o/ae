@@ -126,12 +126,12 @@ class Trainer:
                     for _ in range(batch_size):
                         batch.append(buffer[:seq_len])
                         buffer = buffer[seq_len:]
-                    yield batch
+                    yield np.array(batch)
 
             if buffer:
                 remaining = len(buffer) // seq_len
                 for _ in range(remaining):
-                    yield buffer[:seq_len]
+                    yield np.array(buffer[:seq_len])
                     buffer = buffer[seq_len:]
 
         run = wandb.init(project="ae-dev", config=self.config)
