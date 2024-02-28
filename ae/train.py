@@ -61,7 +61,7 @@ class Trainer:
         return self.cross_entropy(logits, labels, axis=-1)
 
     def train_step(self, optim, optim_state, batch):
-        loss, grads = jax.value_and_grad(self.loss_fn)(self.params, batch["input_ids"])
+        loss, grads = jax.value_and_grad(self.loss_fn)(self.params, batch)
         updates, optim_state = optim.update(grads, optim_state, self.params)
         self.params = optax.apply_updates(self.params, updates)
         return loss, optim_state
@@ -116,25 +116,23 @@ class Trainer:
         np.random.shuffle(indices)
 
         def data_loader(dataset, batch_size, seq_len):
-            eos_token_id = self.tokenizer.eos_token_id
             buffer = []
 
             for example in dataset:
                 buffer.extend(example["input_ids"])
 
-                while len(buffer) >= seq_len:
-                    yield {
-                        "input_ids": jnp.array(buffer[:seq_len]),
-                        "attention_mask": jnp.ones(seq_len),
-                    }
-                    buffer = buffer[seq_len:]
+                while len(buffer) >= seq_len * batch_size:
+                    batch = []
+                    for _ in range(batch_size):
+                        batch.append(buffer[:seq_len])
+                        buffer = buffer[seq_len:]
+                    yield batch
 
             if buffer:
-                buffer.extend([eos_token_id] * (seq_len - len(buffer)))
-                yield {
-                    "input_ids": jnp.array(buffer),
-                    "attention_mask": jnp.ones(seq_len),
-                }
+                remaining = len(buffer) // seq_len
+                for _ in range(remaining):
+                    yield buffer[:seq_len]
+                    buffer = buffer[seq_len:]
 
         run = wandb.init(project="ae-dev", config=self.config)
 
