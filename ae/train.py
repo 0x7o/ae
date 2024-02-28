@@ -62,7 +62,7 @@ class Trainer:
 
     def train_step(self, optim, optim_state, batch):
         loss, grads = jax.value_and_grad(self.loss_fn)(self.params, batch["input_ids"])
-        updates, optim_state = optim.update(grads, optim_state)
+        updates, optim_state = optim.update(grads, optim_state, self.params)
         self.params = optax.apply_updates(self.params, updates)
         return loss, optim_state
 
