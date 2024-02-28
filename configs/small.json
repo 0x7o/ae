@@ -5,11 +5,11 @@
     "n_heads": 12,
     "n_layers": 12,
     "vocab_size": 50257,
-    "seq_len": 2048
+    "seq_len": 1024
   },
   "data": {
-    "name": "Trelis/tiny-shakespeare",
-    "text_column": "Text",
+    "name": "maxtli/OpenWebText-2M",
+    "text_column": "text",
     "split": "train",
     "tokenizer": "gpt2"
   },
@@ -19,15 +19,15 @@
     "optimizer": {
       "type": "adam",
       "params": {
-        "learning_rate": 0.0001
+        "learning_rate": 0.005
       }
     },
     "scheduler": {
       "type": "cosine",
-      "warmup_steps": 10000
+      "warmup_steps": 10
     },
     "clip_grad_norm": 1.0,
     "output_dir": "ae-small",
-    "save_checkpoint_steps": 1000
+    "save_checkpoint_steps": 100
   }
 }

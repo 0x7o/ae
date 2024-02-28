@@ -128,6 +128,7 @@ class LM(nn.Module):
             for _ in range(self.n_layers)
         ]
         self.norm = nn.LayerNorm(self.d_model)
+        self.out = nn.Dense(self.vocab_size)
 
     def __call__(self, x):
         mask = create_mask(x.shape[-1])
@@ -136,25 +137,5 @@ class LM(nn.Module):
         for block in self.blocks:
             x = block(x, mask)
         x = self.norm(x)
+        x = self.out(x)
         return x
-
-
-if __name__ == "__main__":
-    import jax
-
-    # Create a random key
-    key = jax.random.PRNGKey(0)
-
-    # Create an example input
-    x = jnp.ones((10, 200), dtype=jnp.int32)
-    print(x)
-
-    # Initialize the model
-    lm = LM(d_model=512, d_ff=2048, n_heads=8, n_layers=6, vocab_size=2, seq_len=200)
-    params = lm.init(key, x)
-
-    # Apply the model
-    output = lm.apply(params, x)
-
-    print(output)
-    print(output.shape)
