@@ -47,7 +47,7 @@ class Trainer:
         return model, params
 
     def cross_entropy(self, logits, targets, axis=-1):
-        logprobs = nn.softmax(logits, axis=axis)
+        logprobs = nn.log_softmax(logits, axis=axis)
         nll = jnp.take_along_axis(
             logprobs, jnp.expand_dims(targets, axis=axis), axis=axis
         )
