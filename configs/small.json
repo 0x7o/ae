@@ -14,17 +14,13 @@
     "tokenizer": "gpt2"
   },
   "train": {
-    "batch_size": 2,
+    "batch_size": 4,
     "n_epochs": 1,
     "optimizer": {
       "type": "adamw",
       "params": {
-        "learning_rate": 0.005
+        "learning_rate": 0.001
       }
-    },
-    "scheduler": {
-      "type": "cosine",
-      "warmup_steps": 10
     },
     "clip_grad_norm": 1.0,
     "output_dir": "ae-small",

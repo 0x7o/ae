@@ -25,7 +25,7 @@ class Trainer:
         self.model, self.params = self.init_model(**config["model"])
         self.params = jax.device_put(self.params, self.devices[0])
         print(f"Model {config['model']} initialized.")
-        print(f"{sum(p.size for p in jax.tree_flatten(self.params)[0])} parameters")
+        print(f"{round(sum(p.size for p in jax.tree_util.tree_flatten(self.params)[0])/1_000_000, 2)}M parameters")
         self.dataset = load_dataset(config["data"]["name"])
         self.tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
 
@@ -78,34 +78,35 @@ class Trainer:
             optim = optax.adamw(**self.config["train"]["optimizer"]["params"])
         else:
             raise ValueError("Invalid optimizer type")
-
-        if self.config["train"]["scheduler"]["type"] == "cosine":
-            total_steps = (
-                self.config["train"]["n_epochs"]
-                * len(tokenized_datasets[self.config["data"]["split"]])
-                // self.config["train"]["batch_size"]
-            )
-            warmup_steps = self.config["train"]["scheduler"]["warmup_steps"]
-            scheduler = optax.linear_schedule(
-                init_value=0.0,
-                end_value=self.config["train"]["optimizer"]["params"]["learning_rate"],
-                transition_steps=warmup_steps,
-            )
-            scheduler = optax.join_schedules(
-                schedules=[
-                    scheduler,
-                    optax.cosine_decay_schedule(
-                        init_value=self.config["train"]["optimizer"]["params"][
-                            "learning_rate"
-                        ],
-                        decay_steps=total_steps - warmup_steps,
-                    ),
-                ],
-                boundaries=[warmup_steps],
-            )
-            optim = optax.chain(optim, optax.scale_by_schedule(scheduler))
-        else:
-            raise ValueError("Invalid scheduler type")
+        scheduler = None
+        if self.config["train"].get("scheduler") :
+            if self.config["train"]["scheduler"]["type"] == "cosine":
+                total_steps = (
+                    self.config["train"]["n_epochs"]
+                    * len(tokenized_datasets[self.config["data"]["split"]])
+                    // self.config["train"]["batch_size"]
+                )
+                warmup_steps = self.config["train"]["scheduler"]["warmup_steps"]
+                scheduler = optax.linear_schedule(
+                    init_value=0.0,
+                    end_value=self.config["train"]["optimizer"]["params"]["learning_rate"],
+                    transition_steps=warmup_steps,
+                )
+                scheduler = optax.join_schedules(
+                    schedules=[
+                        scheduler,
+                        optax.cosine_decay_schedule(
+                            init_value=self.config["train"]["optimizer"]["params"][
+                                "learning_rate"
+                            ],
+                            decay_steps=total_steps - warmup_steps,
+                        ),
+                    ],
+                    boundaries=[warmup_steps],
+                )
+                optim = optax.chain(optim, optax.scale_by_schedule(scheduler))
+            else:
+                raise ValueError("Invalid scheduler type")
 
         optim_state = optim.init(self.params)
         batch_size = self.config["train"]["batch_size"]
@@ -160,9 +161,12 @@ class Trainer:
                     ) as f:
                         pickle.dump(checkpoint, f)
 
-                run.log(
-                    {"loss": loss, "epoch": epoch, "lr": scheduler(step)}, step=step
-                )
+                if scheduler:
+                    run.log(
+                        {"loss": loss, "epoch": epoch, "lr": scheduler(step)}, step=step
+                    )
+                else:
+                    run.log({"loss": loss, "epoch": epoch}, step=step)
 
 
 if __name__ == "__main__":

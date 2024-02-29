@@ -87,26 +87,6 @@ class FeedForward(nn.Module):
         return x
 
 
-class Block(nn.Module):
-    d_model: int
-    d_ff: int
-    n_heads: int
-    seq_len: int
-
-    def setup(self) -> None:
-        self.attention = SelfAttention(
-            n_heads=self.n_heads, d_model=self.d_model, seq_len=self.seq_len
-        )
-        self.norm = nn.LayerNorm(self.d_model)
-        self.ff = FeedForward(d_model=self.d_model, d_ff=self.d_ff)
-
-    def __call__(self, x, mask):
-        x = x + self.attention(x, x, x, mask)
-        x = x + self.ff(x)
-        x = self.norm(x)
-        return x
-
-
 class LM(nn.Module):
     d_model: int
     d_ff: int
@@ -118,15 +98,8 @@ class LM(nn.Module):
     def setup(self) -> None:
         self.w_e = nn.Embed(self.vocab_size, self.d_model)
         self.p_e = PositionEncoding(d_model=self.d_model)
-        self.blocks = [
-            Block(
-                d_model=self.d_model,
-                d_ff=self.d_ff,
-                n_heads=self.n_heads,
-                seq_len=self.seq_len,
-            )
-            for _ in range(self.n_layers)
-        ]
+        self.attention = SelfAttention(n_heads=self.n_heads, d_model=self.d_model, seq_len=self.seq_len)
+        self.ff = [FeedForward(d_model=self.d_model, d_ff=self.d_ff) for _ in range(self.n_layers)]
         self.norm = nn.LayerNorm(self.d_model)
         self.out = nn.Dense(self.vocab_size)
 
@@ -134,8 +107,9 @@ class LM(nn.Module):
         mask = create_mask(x.shape[-1])
         x = self.w_e(x)
         x = self.p_e(x)
-        for block in self.blocks:
-            x = block(x, mask)
+        x = self.attention(x, x, x, mask)
+        for layer in self.ff:
+            x = layer(x)
         x = self.norm(x)
         x = self.out(x)
         return x
