@@ -170,7 +170,7 @@ class Trainer:
                         pickle.dump(checkpoint, f)
 
                 if self.config["train"].get("generate"):
-                    if self.config["train"]["generate"]["steps"] % step == 0:
+                    if step % self.config["train"]["generate"]["steps"] == 0:
                         print(
                             self.sampler.sample(
                                 prompt=self.config["train"]["generate"]["prompt"]
