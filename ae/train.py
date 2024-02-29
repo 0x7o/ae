@@ -14,6 +14,7 @@ from transformers import AutoTokenizer
 
 from model import LM
 from tqdm import tqdm
+from sampler import Sampler
 from argparse import ArgumentParser
 
 
@@ -25,9 +26,12 @@ class Trainer:
         self.model, self.params = self.init_model(**config["model"])
         self.params = jax.device_put(self.params, self.devices[0])
         print(f"Model {config['model']} initialized.")
-        print(f"{round(sum(p.size for p in jax.tree_util.tree_flatten(self.params)[0])/1_000_000, 2)}M parameters")
+        print(
+            f"{round(sum(p.size for p in jax.tree_util.tree_flatten(self.params)[0])/1_000_000, 2)}M parameters"
+        )
         self.dataset = load_dataset(config["data"]["name"])
         self.tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
+        self.sampler = Sampler(self.model, self.params, self.tokenizer, self.devices)
 
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -78,8 +82,10 @@ class Trainer:
             optim = optax.adamw(**self.config["train"]["optimizer"]["params"])
         else:
             raise ValueError("Invalid optimizer type")
+
         scheduler = None
-        if self.config["train"].get("scheduler") :
+
+        if self.config["train"].get("scheduler"):
             if self.config["train"]["scheduler"]["type"] == "cosine":
                 total_steps = (
                     self.config["train"]["n_epochs"]
@@ -89,7 +95,9 @@ class Trainer:
                 warmup_steps = self.config["train"]["scheduler"]["warmup_steps"]
                 scheduler = optax.linear_schedule(
                     init_value=0.0,
-                    end_value=self.config["train"]["optimizer"]["params"]["learning_rate"],
+                    end_value=self.config["train"]["optimizer"]["params"][
+                        "learning_rate"
+                    ],
                     transition_steps=warmup_steps,
                 )
                 scheduler = optax.join_schedules(
@@ -160,6 +168,14 @@ class Trainer:
                         os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
                     ) as f:
                         pickle.dump(checkpoint, f)
+
+                if self.config["train"].get("generate"):
+                    if self.config["train"]["generate"]["steps"] % step == 0:
+                        print(
+                            self.sampler.sample(
+                                prompt=self.config["train"]["generate"]["prompt"]
+                            )
+                        )
 
                 if scheduler:
                     run.log(

@@ -1,9 +1,9 @@
 {
   "model": {
-    "d_model": 768,
-    "d_ff": 1024,
-    "n_heads": 12,
-    "n_layers": 12,
+    "d_model": 1024,
+    "d_ff": 2816,
+    "n_heads": 16,
+    "n_layers": 24,
     "vocab_size": 50257,
     "seq_len": 1024
   },
@@ -19,11 +19,15 @@
     "optimizer": {
       "type": "adamw",
       "params": {
-        "learning_rate": 0.0002
+        "learning_rate": 0.0001
       }
     },
     "clip_grad_norm": 1.0,
-    "output_dir": "ae-small",
-    "save_checkpoint_steps": 1000
+    "output_dir": "ae-0-3B",
+    "save_checkpoint_steps": 1000,
+    "generate": {
+      "steps": 100,
+      "prompt": "Neural network is"
+    }
   }
 }

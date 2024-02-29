@@ -98,8 +98,13 @@ class LM(nn.Module):
     def setup(self) -> None:
         self.w_e = nn.Embed(self.vocab_size, self.d_model)
         self.p_e = PositionEncoding(d_model=self.d_model)
-        self.attention = SelfAttention(n_heads=self.n_heads, d_model=self.d_model, seq_len=self.seq_len)
-        self.ff = [FeedForward(d_model=self.d_model, d_ff=self.d_ff) for _ in range(self.n_layers)]
+        self.attention = SelfAttention(
+            n_heads=self.n_heads, d_model=self.d_model, seq_len=self.seq_len
+        )
+        self.ff = [
+            FeedForward(d_model=self.d_model, d_ff=self.d_ff)
+            for _ in range(self.n_layers)
+        ]
         self.norm = nn.LayerNorm(self.d_model)
         self.out = nn.Dense(self.vocab_size)
 
