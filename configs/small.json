@@ -22,6 +22,10 @@
         "learning_rate": 0.001
       }
     },
+    "scheduler": {
+      "type": "cosine",
+      "warmup_steps": 10
+    },
     "clip_grad_norm": 1.0,
     "output_dir": "ae-small",
     "save_checkpoint_steps": 100
