@@ -14,7 +14,7 @@
     "tokenizer": "gpt2"
   },
   "train": {
-    "batch_size": 8,
+    "batch_size": 16,
     "n_epochs": 1,
     "optimizer": {
       "type": "adamw",
@@ -28,6 +28,6 @@
     },
     "clip_grad_norm": 1.0,
     "output_dir": "ae-small",
-    "save_checkpoint_steps": 100
+    "save_checkpoint_steps": 1000
   }
 }
