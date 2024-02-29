@@ -173,7 +173,7 @@ class Trainer:
                     if step % self.config["train"]["generate"]["steps"] == 0:
                         print(
                             self.sampler.sample(
-                                prompt=self.config["train"]["generate"]["prompt"]
+                                prompt=self.config["train"]["generate"]["prompt"], max_length=20
                             )
                         )
 
