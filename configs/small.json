@@ -15,7 +15,7 @@
   },
   "train": {
     "batch_size": 8,
-    "n_epochs": 1,
+    "n_epochs": 3,
     "optimizer": {
       "type": "adamw",
       "params": {
