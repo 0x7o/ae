@@ -14,12 +14,12 @@
     "tokenizer": "gpt2"
   },
   "train": {
-    "batch_size": 4,
+    "batch_size": 8,
     "n_epochs": 1,
     "optimizer": {
       "type": "adamw",
       "params": {
-        "learning_rate": 0.001
+        "learning_rate": 0.05
       }
     },
     "scheduler": {
