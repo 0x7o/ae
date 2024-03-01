@@ -8,7 +8,7 @@
     "seq_len": 1024
   },
   "data": {
-    "name": "Locutusque/TM-DATA",
+    "name": "Skylion007/openwebtext",
     "text_column": "text",
     "split": "train",
     "tokenizer": "gpt2"
