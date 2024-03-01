@@ -11,17 +11,15 @@ class Sampler:
         self,
         model: LM,
         tokenizer: AutoTokenizer,
-        devices: list[jax.Device],
     ):
         self.model = model
         self.tokenizer = tokenizer
-        self.devices = devices
 
     def sample(
         self, params: dict, prompt: str, max_length: int = 100, temperature: float = 1.0
     ):
         input_ids = self.tokenizer.encode(prompt, return_tensors="jax")
-        input_ids = jax.device_put(input_ids, self.devices[0])
+        input_ids = jax.device_put(input_ids, jax.devices()[0])
 
         generated = input_ids
         key = jax.random.PRNGKey(int(time.time() * 1000) % (2**32))
