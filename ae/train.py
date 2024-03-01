@@ -10,7 +10,6 @@ import pickle
 import numpy as np
 import jax.numpy as jnp
 import flax.linen as nn
-from flax import jax_utils
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
@@ -27,7 +26,6 @@ class Trainer:
         self.devices = jax.devices()
         print("Devices: ", self.devices)
         self.model, self.params = self.init_model(**config["model"])
-        self.params = jax_utils.replicate(self.params, self.devices)
         print(f"Model {config['model']} initialized.")
         print(
             f"{round(sum(p.size for p in jax.tree_util.tree_flatten(self.params)[0])/1_000_000, 2)}M parameters"
