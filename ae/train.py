@@ -26,6 +26,7 @@ class Trainer:
         self.devices = jax.devices()
         print("Devices: ", self.devices)
         self.model, self.params = self.init_model(**config["model"])
+        self.params = jax.device_put_replicated(self.params, jax.devices())
         print(f"Model {config['model']} initialized.")
         print(
             f"{round(sum(p.size for p in jax.tree_util.tree_flatten(self.params)[0])/1_000_000, 2)}M parameters"
