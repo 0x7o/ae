@@ -129,7 +129,7 @@ class Trainer:
             buffer = []
 
             for example in dataset:
-                example["input_ids"] = example["input_ids"] + [self.tokenizer.eos_token_id]
+                example["input_ids"].append(self.tokenizer.eos_token_id)
                 buffer.extend(example["input_ids"])
 
                 while len(buffer) >= seq_len * batch_size:
