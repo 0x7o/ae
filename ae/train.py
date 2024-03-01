@@ -34,7 +34,7 @@ class Trainer:
         )
         self.dataset = load_dataset(config["data"]["name"])
         self.tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
-        self.sampler = Sampler(self.model, self.tokenizer, self.shard)
+        self.sampler = Sampler(self.model, self.tokenizer, jax.devices())
 
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -65,6 +65,7 @@ class Trainer:
         logits = self.model.apply(params, inputs)
         return self.cross_entropy(logits, targets, axis=-1)
 
+    @jax.jit
     def train_step(self, optim, optim_state, inputs, targets):
         loss, grads = jax.value_and_grad(self.loss_fn)(self.params, inputs, targets)
         updates, optim_state = optim.update(grads, optim_state, self.params)
