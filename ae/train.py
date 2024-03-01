@@ -65,12 +65,15 @@ class Trainer:
         inp, labels = batch[:, :-1], batch[:, 1:]
         logits = self.model.apply(params, inp)
         loss = self.cross_entropy(logits, labels, axis=-1)
-        return jax.lax.pmean(loss, axis_name='num_devices')  # calculate mean across devices
+        loss = jax.lax.pmean(loss, axis_name="num_devices")
+        return jnp.array([loss])
 
-    @partial(jax.pmap, axis_name='num_devices')
+    @partial(jax.pmap, axis_name="num_devices")
     def train_step(self, optim, optim_state, batch):
         loss, grads = jax.value_and_grad(self.loss_fn)(self.params, batch)
-        grads = jax.lax.pmean(grads, axis_name='num_devices')  # calculate mean across devices
+        grads = jax.lax.pmean(
+            grads, axis_name="num_devices"
+        )
         updates, optim_state = optim.update(grads, optim_state, self.params)
         self.params = optax.apply_updates(self.params, updates)
         return loss, optim_state
@@ -158,21 +161,23 @@ class Trainer:
 
         for epoch in range(n_epochs):
             for batch in tqdm(
-                    data_loader(
-                        tokenized_datasets["train"],
-                        batch_size,
-                        self.config["model"]["seq_len"],
-                    ),
-                    total=len(tokenized_datasets["train"]) // batch_size,
-                    desc=f"Epoch {epoch + 1}",
+                data_loader(
+                    tokenized_datasets["train"],
+                    batch_size,
+                    self.config["model"]["seq_len"],
+                ),
+                total=len(tokenized_datasets["train"]) // batch_size,
+                desc=f"Epoch {epoch + 1}",
             ):
                 n_devices = jax.device_count()
                 batch_size, *data_shapes = batch.shape
-                assert batch_size % n_devices == 0, 'The data cannot be split evenly to the devices'
+                assert (
+                    batch_size % n_devices == 0
+                ), "The data cannot be split evenly to the devices"
                 batch = batch.reshape(n_devices, batch_size // n_devices, *data_shapes)
-                print(f"Shape of batch after reshaping: {batch.shape}")  # Debugging line
-                batch = device_put_pmap(batch)  # distribute the batch across all devices
-                print(f"Shape of batch after device_put_pmap: {batch.shape}")  # Debugging line
+                batch = device_put_pmap(
+                    batch
+                )
                 loss, optim_state = self.train_step(optim, optim_state, batch)
                 step += 1
 
