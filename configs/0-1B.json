@@ -4,14 +4,14 @@
     "d_ff": 1024,
     "n_heads": 12,
     "n_layers": 12,
-    "vocab_size": 50272,
+    "vocab_size": 50257,
     "seq_len": 1024
   },
   "data": {
-    "name": "IlyaGusev/stihi_ru",
+    "name": "roneneldan/TinyStories",
     "text_column": "text",
     "split": "train",
-    "tokenizer": "ai-forever/ruGPT-3.5-13B"
+    "tokenizer": "gpt2"
   },
   "train": {
     "batch_size": 32,
@@ -27,7 +27,7 @@
     "save_checkpoint_steps": 1000,
     "generate": {
       "steps": 100,
-      "prompt": "Однажды"
+      "prompt": "Once upon a time,"
     }
   }
 }
