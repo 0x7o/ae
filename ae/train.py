@@ -34,7 +34,7 @@ class Trainer:
         )
         self.dataset = load_dataset(config["data"]["name"])
         self.tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
-        self.sampler = Sampler(self.model, self.tokenizer)
+        self.sampler = Sampler(self.model, self.tokenizer, self.shard)
 
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
