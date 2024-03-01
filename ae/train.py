@@ -172,6 +172,11 @@ class Trainer:
                     ) as f:
                         pickle.dump(checkpoint, f)
 
+                    with open(
+                        os.path.join(output_dir, "config.json"), "w"
+                    ) as f:
+                        json.dump(self.config["model"], f, indent=4)
+
                 if self.config["train"].get("generate"):
                     if step % self.config["train"]["generate"]["steps"] == 0:
                         print(
