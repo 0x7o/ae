@@ -1,7 +1,5 @@
 import os
 import json
-from functools import partial
-
 import wandb
 
 import jax
@@ -26,10 +24,9 @@ class Trainer:
         self.devices = jax.devices()
         print("Devices: ", self.devices)
         self.model, self.params = self.init_model(**config["model"])
-        self.params = jax.device_put_replicated(self.params, jax.devices())
         print(f"Model {config['model']} initialized.")
         print(
-            f"{round(sum(p.size for p in jax.tree_util.tree_flatten(self.params)[0])/1_000_000, 2)}M parameters"
+            f"{round(sum(p.size for p in jax.tree_util.tree_flatten(self.params)[0]) / 1_000_000, 2)}M parameters"
         )
         self.dataset = load_dataset(config["data"]["name"])
         self.tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
@@ -64,18 +61,18 @@ class Trainer:
         batch = batch.reshape(-1, self.config["model"]["seq_len"])
         inp, labels = batch[:, :-1], batch[:, 1:]
         logits = self.model.apply(params, inp)
-        loss = self.cross_entropy(logits, labels, axis=-1)
-        loss = jax.lax.pmean(loss, axis_name="num_devices")
-        return jnp.array([loss])
+        return self.cross_entropy(logits, labels, axis=-1)
 
-    @partial(jax.pmap, axis_name="num_devices")
     def train_step(self, optim, optim_state, batch):
-        loss, grads = jax.value_and_grad(self.loss_fn)(self.params, batch)
-        grads = jax.lax.pmean(
-            grads, axis_name="num_devices"
-        )
-        updates, optim_state = optim.update(grads, optim_state, self.params)
-        self.params = optax.apply_updates(self.params, updates)
+        def single_device_step(params, optim_state, batch):
+            loss, grads = jax.value_and_grad(self.loss_fn)(params, batch)
+            updates, optim_state = optim.update(grads, optim_state, params)
+            params = optax.apply_updates(params, updates)
+            return params, optim_state, loss
+
+        parallel_step = jax.pmap(single_device_step, axis_name='num_devices')
+        self.params, optim_state, losses = parallel_step(self.params, optim_state, batch)
+        loss = jax.lax.pmean(losses, axis_name='num_devices')
         return loss, optim_state
 
     def train(self):
@@ -96,9 +93,9 @@ class Trainer:
         if self.config["train"].get("scheduler"):
             if self.config["train"]["scheduler"]["type"] == "cosine":
                 total_steps = (
-                    self.config["train"]["n_epochs"]
-                    * len(tokenized_datasets[self.config["data"]["split"]])
-                    // self.config["train"]["batch_size"]
+                        self.config["train"]["n_epochs"]
+                        * len(tokenized_datasets[self.config["data"]["split"]])
+                        // self.config["train"]["batch_size"]
                 )
                 warmup_steps = self.config["train"]["scheduler"]["warmup_steps"]
                 scheduler = optax.linear_schedule(
@@ -124,7 +121,10 @@ class Trainer:
             else:
                 raise ValueError("Invalid scheduler type")
 
+        self.params = jax.tree_map(lambda x: jnp.array([x] * len(self.devices)), self.params)
+
         optim_state = optim.init(self.params)
+        optim_state = jax.tree_map(lambda x: jnp.array([x] * len(self.devices)), optim_state)
         batch_size = self.config["train"]["batch_size"]
         n_epochs = self.config["train"]["n_epochs"]
         output_dir = self.config["train"]["output_dir"]
@@ -154,30 +154,17 @@ class Trainer:
         run = wandb.init(project="ae-dev", config=self.config)
 
         step = 0
-
-        @jax.pmap
-        def device_put_pmap(x):
-            return jax.device_put(x)
-
         for epoch in range(n_epochs):
             for batch in tqdm(
-                data_loader(
-                    tokenized_datasets["train"],
-                    batch_size,
-                    self.config["model"]["seq_len"],
-                ),
-                total=len(tokenized_datasets["train"]) // batch_size,
-                desc=f"Epoch {epoch + 1}",
+                    data_loader(
+                        tokenized_datasets["train"],
+                        batch_size,
+                        self.config["model"]["seq_len"],
+                    ),
+                    total=len(tokenized_datasets["train"]) // batch_size,
+                    desc=f"Epoch {epoch + 1}",
             ):
-                n_devices = jax.device_count()
-                batch_size, *data_shapes = batch.shape
-                assert (
-                    batch_size % n_devices == 0
-                ), "The data cannot be split evenly to the devices"
-                batch = batch.reshape(n_devices, batch_size // n_devices, *data_shapes)
-                batch = device_put_pmap(
-                    batch
-                )
+                batch = batch.reshape((len(self.devices), -1) + batch.shape[1:])
                 loss, optim_state = self.train_step(optim, optim_state, batch)
                 step += 1
 
@@ -186,7 +173,7 @@ class Trainer:
                     os.makedirs(output_dir, exist_ok=True)
 
                     with open(
-                        os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
+                            os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
                     ) as f:
                         pickle.dump(checkpoint, f)
 

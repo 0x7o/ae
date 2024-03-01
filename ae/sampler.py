@@ -24,9 +24,7 @@ class Sampler:
         input_ids = jax.device_put(input_ids, self.devices[0])
 
         generated = input_ids
-        key = jax.random.PRNGKey(
-            int(time.time() * 1000) % (2**32)
-        )  # Use current time as seed
+        key = jax.random.PRNGKey(int(time.time() * 1000) % (2**32))
 
         for _ in range(max_length):
             outputs = self.model.apply(params, generated)
