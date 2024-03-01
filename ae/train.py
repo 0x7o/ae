@@ -1,5 +1,7 @@
 import os
 import json
+from functools import partial
+
 import wandb
 
 import jax
@@ -8,6 +10,7 @@ import pickle
 import numpy as np
 import jax.numpy as jnp
 import flax.linen as nn
+from flax import jax_utils
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
@@ -24,7 +27,7 @@ class Trainer:
         self.devices = jax.devices()
         print("Devices: ", self.devices)
         self.model, self.params = self.init_model(**config["model"])
-        self.params = jax.device_put(self.params, self.devices[0])
+        self.params = jax_utils.replicate(self.params, self.devices)
         print(f"Model {config['model']} initialized.")
         print(
             f"{round(sum(p.size for p in jax.tree_util.tree_flatten(self.params)[0])/1_000_000, 2)}M parameters"
@@ -62,10 +65,13 @@ class Trainer:
         batch = batch.reshape(-1, self.config["model"]["seq_len"])
         inp, labels = batch[:, :-1], batch[:, 1:]
         logits = self.model.apply(params, inp)
-        return self.cross_entropy(logits, labels, axis=-1)
+        loss = self.cross_entropy(logits, labels, axis=-1)
+        return jax.lax.pmean(loss, axis_name='num_devices')  # calculate mean across devices
 
+    @partial(jax.pmap, axis_name='num_devices')
     def train_step(self, optim, optim_state, batch):
         loss, grads = jax.value_and_grad(self.loss_fn)(self.params, batch)
+        grads = jax.lax.pmean(grads, axis_name='num_devices')  # calculate mean across devices
         updates, optim_state = optim.update(grads, optim_state, self.params)
         self.params = optax.apply_updates(self.params, updates)
         return loss, optim_state
@@ -146,17 +152,28 @@ class Trainer:
         run = wandb.init(project="ae-dev", config=self.config)
 
         step = 0
+
+        @jax.pmap
+        def device_put_pmap(x):
+            return jax.device_put(x)
+
         for epoch in range(n_epochs):
             for batch in tqdm(
-                data_loader(
-                    tokenized_datasets["train"],
-                    batch_size,
-                    self.config["model"]["seq_len"],
-                ),
-                total=len(tokenized_datasets["train"]) // batch_size,
-                desc=f"Epoch {epoch + 1}",
+                    data_loader(
+                        tokenized_datasets["train"],
+                        batch_size,
+                        self.config["model"]["seq_len"],
+                    ),
+                    total=len(tokenized_datasets["train"]) // batch_size,
+                    desc=f"Epoch {epoch + 1}",
             ):
-                batch = jax.device_put(batch, self.devices[0])
+                n_devices = jax.device_count()
+                batch_size, *data_shapes = batch.shape
+                assert batch_size % n_devices == 0, 'The data cannot be split evenly to the devices'
+                batch = batch.reshape(n_devices, batch_size // n_devices, *data_shapes)
+                print(f"Shape of batch after reshaping: {batch.shape}")  # Debugging line
+                batch = device_put_pmap(batch)  # distribute the batch across all devices
+                print(f"Shape of batch after device_put_pmap: {batch.shape}")  # Debugging line
                 loss, optim_state = self.train_step(optim, optim_state, batch)
                 step += 1
 
