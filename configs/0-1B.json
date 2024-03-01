@@ -8,13 +8,13 @@
     "seq_len": 1024
   },
   "data": {
-    "name": "stas/openwebtext-10k",
+    "name": "Locutusque/TM-DATA",
     "text_column": "text",
     "split": "train",
     "tokenizer": "gpt2"
   },
   "train": {
-    "batch_size": 64,
+    "batch_size": 32,
     "n_epochs": 3,
     "optimizer": {
       "type": "adamw",
