@@ -13,3 +13,7 @@ Code base for training GPT-like models on TPUs with support for parallelization 
 
 - [Phil Wang](https://github.com/lucidrains) for the [PaLM-jax](https://github.com/lucidrains/PaLM-jax)
 - [Hugging Face](https://huggingface.co/) for the [transformers](https://github.com/huggingface/transformers)
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

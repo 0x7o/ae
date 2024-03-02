@@ -22,9 +22,6 @@ from sampler import Sampler
 from argparse import ArgumentParser
 
 
-# TODO: pjit model parallelism
-
-
 class Trainer:
     def __init__(self, config):
         self.config = config
