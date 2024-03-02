@@ -7,14 +7,14 @@
     "seq_len": 1024
   },
   "data": {
-    "name": "roneneldan/TinyStories",
+    "name": "Elriggs/openwebtext-100k",
     "text_column": "text",
     "split": "train",
     "tokenizer": "gpt2"
   },
   "train": {
     "batch_size": 32,
-    "n_epochs": 1,
+    "n_epochs": 5,
     "optimizer": {
       "type": "adamw",
       "params": {
@@ -33,6 +33,6 @@
         ]
     },
     "output_dir": "ae-0-1B",
-    "save_checkpoint_steps": 60000
+    "save_checkpoint_steps": 1000
   }
 }
