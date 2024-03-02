@@ -1,5 +1,5 @@
+![æ](https://i.imgur.com/tWGT12O_d.webp?maxwidth=760&fidelity=grand)
 # (WIP) æ
-
 Code base for training GPT-like models on TPUs with support for parallelization and scaling on JAX.
 
 ## To Do
