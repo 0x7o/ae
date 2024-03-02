@@ -1,6 +1,6 @@
 {
   "model": {
-    "d_model": 768,
+    "d_model": 1024,
     "n_heads": 12,
     "n_layers": 12,
     "vocab_size": 50257,
@@ -18,7 +18,7 @@
     "optimizer": {
       "type": "adamw",
       "params": {
-        "learning_rate": 0.0005,
+        "learning_rate": 0.001,
         "clip_norm": 0.5,
         "accum_steps": 4
       }
