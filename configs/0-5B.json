@@ -13,7 +13,7 @@
     "tokenizer": "gpt2"
   },
   "train": {
-    "batch_size": 32,
+    "batch_size": 16,
     "n_epochs": 3,
     "optimizer": {
       "type": "adamw",
