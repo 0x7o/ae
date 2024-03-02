@@ -29,11 +29,12 @@
     },
     "generate": {
         "steps": 1000,
-        "max_length": 20,
+        "max_length": 128,
         "prompts": [
           "Once upon a time",
           "In a galaxy far far away",
-          "In a world where"
+          "In a world where",
+            "The quick brown fox jumps over the"
         ]
     },
     "output_dir": "ae-0-1B",

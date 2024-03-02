@@ -24,6 +24,7 @@ from argparse import ArgumentParser
 
 # TODO: pjit model parallelism
 
+
 class Trainer:
     def __init__(self, config):
         self.config = config
@@ -117,9 +118,9 @@ class Trainer:
         if self.config["train"].get("scheduler"):
             if self.config["train"]["scheduler"]["type"] == "cosine":
                 total_steps = (
-                        self.config["train"]["n_epochs"]
-                        * len(tokenized_datasets[self.config["data"]["split"]])
-                        // self.config["train"]["batch_size"]
+                    self.config["train"]["n_epochs"]
+                    * len(tokenized_datasets[self.config["data"]["split"]])
+                    // self.config["train"]["batch_size"]
                 )
                 warmup_steps = self.config["train"]["scheduler"]["warmup_steps"]
                 scheduler = optax.linear_schedule(
@@ -178,7 +179,8 @@ class Trainer:
         step = 0
 
         for epoch in range(n_epochs):
-            for batch in tqdm(
+            for i, batch in enumerate(
+                tqdm(
                     data_loader(
                         tokenized_datasets["train"],
                         batch_size,
@@ -186,9 +188,17 @@ class Trainer:
                     ),
                     total=len(tokenized_datasets["train"]) // batch_size,
                     desc=f"Epoch {epoch + 1}",
+                )
             ):
                 batch = batch.reshape(-1, self.config["model"]["seq_len"])
                 inputs, targets = batch[:, :-1], batch[:, 1:]
+
+                if (
+                    i == len(tokenized_datasets["train"]) // batch_size - 1
+                    and len(inputs) % len(self.devices) != 0
+                ):
+                    continue
+
                 inputs, targets = jax.device_put((inputs, targets), self.shard)
                 params, loss, optim_state = self.train_step(
                     self.params, optim_state, inputs, targets
@@ -197,11 +207,15 @@ class Trainer:
                 step += 1
 
                 if step % save_checkpoint_steps == 0:
-                    checkpoint = {"params": jax.tree_map(lambda x: jnp.asarray(x, dtype=jnp.int32), self.params)}
+                    checkpoint = {
+                        "params": jax.tree_map(
+                            lambda x: jnp.asarray(x, dtype=jnp.int32), self.params
+                        )
+                    }
                     os.makedirs(output_dir, exist_ok=True)
 
                     with open(
-                            os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
+                        os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
                     ) as f:
                         pickle.dump(checkpoint, f)
 
