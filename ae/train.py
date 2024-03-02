@@ -84,15 +84,27 @@ class Trainer:
 
         if self.config["train"]["optimizer"]["type"] == "adam":
             optim = optax.chain(
-                optax.clip_by_global_norm(self.config["train"]["optimizer"]["params"]["clip_norm"]),
-                optax.adam(self.config["train"]["optimizer"]["params"]["learning_rate"]),
-                optax.apply_every(self.config["train"]["optimizer"]["params"]["accum_steps"]),
+                optax.clip_by_global_norm(
+                    self.config["train"]["optimizer"]["params"]["clip_norm"]
+                ),
+                optax.adam(
+                    self.config["train"]["optimizer"]["params"]["learning_rate"]
+                ),
+                optax.apply_every(
+                    self.config["train"]["optimizer"]["params"]["accum_steps"]
+                ),
             )
         elif self.config["train"]["optimizer"]["type"] == "adamw":
             optim = optax.chain(
-                optax.clip_by_global_norm(self.config["train"]["optimizer"]["params"]["clip_norm"]),
-                optax.adamw(self.config["train"]["optimizer"]["params"]["learning_rate"]),
-                optax.apply_every(self.config["train"]["optimizer"]["params"]["accum_steps"]),
+                optax.clip_by_global_norm(
+                    self.config["train"]["optimizer"]["params"]["clip_norm"]
+                ),
+                optax.adamw(
+                    self.config["train"]["optimizer"]["params"]["learning_rate"]
+                ),
+                optax.apply_every(
+                    self.config["train"]["optimizer"]["params"]["accum_steps"]
+                ),
             )
         else:
             raise ValueError("Invalid optimizer type")
@@ -102,9 +114,9 @@ class Trainer:
         if self.config["train"].get("scheduler"):
             if self.config["train"]["scheduler"]["type"] == "cosine":
                 total_steps = (
-                        self.config["train"]["n_epochs"]
-                        * len(tokenized_datasets[self.config["data"]["split"]])
-                        // self.config["train"]["batch_size"]
+                    self.config["train"]["n_epochs"]
+                    * len(tokenized_datasets[self.config["data"]["split"]])
+                    // self.config["train"]["batch_size"]
                 )
                 warmup_steps = self.config["train"]["scheduler"]["warmup_steps"]
                 scheduler = optax.linear_schedule(
@@ -164,18 +176,20 @@ class Trainer:
 
         for epoch in range(n_epochs):
             for batch in tqdm(
-                    data_loader(
-                        tokenized_datasets["train"],
-                        batch_size,
-                        self.config["model"]["seq_len"],
-                    ),
-                    total=len(tokenized_datasets["train"]) // batch_size,
-                    desc=f"Epoch {epoch + 1}",
+                data_loader(
+                    tokenized_datasets["train"],
+                    batch_size,
+                    self.config["model"]["seq_len"],
+                ),
+                total=len(tokenized_datasets["train"]) // batch_size,
+                desc=f"Epoch {epoch + 1}",
             ):
                 batch = batch.reshape(-1, self.config["model"]["seq_len"])
                 inputs, targets = batch[:, :-1], batch[:, 1:]
                 inputs, targets = jax.device_put((inputs, targets), self.shard)
-                params, loss, optim_state = self.train_step(self.params, optim_state, inputs, targets)
+                params, loss, optim_state = self.train_step(
+                    self.params, optim_state, inputs, targets
+                )
                 self.params = params
                 step += 1
 
@@ -184,7 +198,7 @@ class Trainer:
                     os.makedirs(output_dir, exist_ok=True)
 
                     with open(
-                            os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
+                        os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
                     ) as f:
                         pickle.dump(checkpoint, f)
 

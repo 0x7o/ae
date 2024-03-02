@@ -38,19 +38,11 @@ class LayerNorm(nn.Module):
 
 
 class SelfAttentionHead(nn.Module):
-    d_model: int
-    seq_len: int
-
-    def setup(self) -> None:
-        self.qn = nn.Dense(self.d_model)
-        self.kn = nn.Dense(self.d_model)
-        self.vn = nn.Dense(self.d_model)
-
-    def __call__(self, v, k, q, mask=None):
-        q = self.qn(q)
-        k = self.kn(k)
-        v = self.vn(v)
-        attn_weights = jnp.matmul(q, jnp.swapaxes(k, -2, -1)) / jnp.sqrt(self.d_model)
+    def __call__(self, v, k, q, wi, mask=None):
+        q = q @ wi
+        k = k @ wi
+        v = v @ wi
+        attn_weights = jnp.matmul(q, jnp.swapaxes(k, -2, -1)) / jnp.sqrt(q.shape[-1])
         if mask is not None:
             attn_weights = jnp.where(mask, attn_weights, -1e10)
         return q + (nn.softmax(attn_weights) @ v)
@@ -62,14 +54,11 @@ class SelfAttention(nn.Module):
     seq_len: int
 
     def setup(self) -> None:
-        self.heads = [
-            SelfAttentionHead(d_model=self.d_model, seq_len=self.seq_len)
-            for _ in range(self.n_heads)
-        ]
+        self.heads = [SelfAttentionHead() for _ in range(self.n_heads)]
         self.out = nn.Dense(self.d_model)
 
-    def __call__(self, v, k, q, mask=None):
-        outputs = [head(v, k, q, mask) for head in self.heads]
+    def __call__(self, v, k, q, wi, mask=None):
+        outputs = [head(v, k, q, wi, mask) for head in self.heads]
         return self.out(jnp.concatenate(outputs, axis=-1))
 
 
@@ -85,16 +74,31 @@ class PositionEncoding(nn.Module):
 
 
 class FeedForward(nn.Module):
+    def __call__(self, x, wi):
+        x = nn.swish(x @ wi)
+        x = x @ wi
+        return x
+
+
+class Block(nn.Module):
     d_model: int
-    d_ff: int
+    n_heads: int
+    seq_len: int
 
     def setup(self) -> None:
-        self.layer1 = nn.Dense(self.d_ff)
-        self.layer2 = nn.Dense(self.d_model)
+        self.attention = SelfAttention(
+            n_heads=self.n_heads, d_model=self.d_model, seq_len=self.seq_len
+        )
+        self.norm = LayerNorm()
+        self.wi = self.param(
+            "wi", nn.initializers.xavier_uniform(), (self.d_model, self.d_model)
+        )
+        self.ff = FeedForward()
 
-    def __call__(self, x):
-        x = nn.swish(self.layer1(x))
-        x = self.layer2(x)
+    def __call__(self, x, mask=None):
+        x = self.attention(x, x, x, self.wi, mask)
+        x = self.norm(x)
+        x = self.ff(x, self.wi)
         return x
 
 
@@ -109,12 +113,12 @@ class LM(nn.Module):
     def setup(self) -> None:
         self.w_e = nn.Embed(self.vocab_size, self.d_model)
         self.p_e = PositionEncoding(d_model=self.d_model)
-        self.attention = SelfAttention(
-            n_heads=self.n_heads, d_model=self.d_model, seq_len=self.seq_len
-        )
-        self.norms = [LayerNorm() for _ in range(self.n_layers)]
-        self.ff = [
-            FeedForward(d_model=self.d_model, d_ff=self.d_ff)
+        self.blocks = [
+            Block(
+                d_model=self.d_model,
+                n_heads=self.n_heads,
+                seq_len=self.seq_len,
+            )
             for _ in range(self.n_layers)
         ]
         self.out = nn.Dense(self.vocab_size)
@@ -123,9 +127,7 @@ class LM(nn.Module):
         mask = create_mask(x.shape[-1])
         x = self.w_e(x)
         x = self.p_e(x)
-        x = self.attention(x, x, x, mask)
-        for norm, layer in zip(self.norms, self.ff):
-            x = norm(x)
-            x = layer(x)
+        for block in self.blocks:
+            x = block(x, mask)
         x = self.out(x)
         return x

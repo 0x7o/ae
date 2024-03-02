@@ -31,7 +31,9 @@ class Sampler:
 
         if input_ids.shape[0] % num_cores != 0:
             padding_size = num_cores - (input_ids.shape[0] % num_cores)
-            padding = jnp.zeros((padding_size,) + input_ids.shape[1:], dtype=input_ids.dtype)
+            padding = jnp.zeros(
+                (padding_size,) + input_ids.shape[1:], dtype=input_ids.dtype
+            )
             input_ids = jnp.concatenate([input_ids, padding], axis=0)
 
         input_ids = jax.device_put(input_ids, self.shard)
