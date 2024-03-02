@@ -18,15 +18,22 @@
     "optimizer": {
       "type": "adamw",
       "params": {
-        "learning_rate": 0.0001
+        "learning_rate": 0.0002,
+        "clip_norm": 1.0,
+        "accum_steps": 1
       }
     },
     "clip_grad_norm": 1.0,
     "output_dir": "ae-0-3B",
     "save_checkpoint_steps": 1000,
     "generate": {
-      "steps": 100,
-      "prompt": "Neural network is"
+        "steps": 1000,
+        "max_length": 20,
+        "prompts": [
+          "Once upon a time",
+          "In a galaxy far far away",
+          "In a world where"
+        ]
     }
   }
 }
