@@ -24,6 +24,16 @@
     },
     "clip_grad_norm": 1.0,
     "output_dir": "ae-0-1B",
-    "save_checkpoint_steps": 1000
+    "save_checkpoint_steps": 1000,
+    "generate": {
+      "steps": 100,
+      "max_length": 10,
+      "prompts": [
+        "Neural network is",
+        "I am",
+        "The meaning of life is",
+        "Once upon a time"
+      ]
+    }
   }
 }

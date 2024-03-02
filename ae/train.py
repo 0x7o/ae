@@ -30,11 +30,11 @@ class Trainer:
         self.model, self.params = self.init_model(**config["model"])
         print(f"Model {config['model']} initialized.")
         print(
-            f"{round(sum(p.size for p in jax.tree_util.tree_flatten(self.params)[0])/1_000_000, 2)}M parameters"
+            f"{round(sum(p.size for p in jax.tree_util.tree_flatten(self.params)[0]) / 1_000_000, 2)}M parameters"
         )
         self.dataset = load_dataset(config["data"]["name"])
         self.tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
-        self.sampler = Sampler(self.model, self.tokenizer, jax.devices())
+        self.sampler = Sampler(self.model, self.tokenizer, self.shard)
 
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -67,9 +67,10 @@ class Trainer:
 
     @jax.jit
     def train_step(self, optim, optim_state, inputs, targets):
-        loss, grads = jax.value_and_grad(self.loss_fn)(self.params, inputs, targets)
-        updates, optim_state = optim.update(grads, optim_state, self.params)
-        self.params = optax.apply_updates(self.params, updates)
+        params = self.params
+        loss, grads = jax.value_and_grad(self.loss_fn)(params, inputs, targets)
+        updates, optim_state = optim.update(grads, optim_state, params)
+        self.params = optax.apply_updates(params, updates)
         return loss, optim_state
 
     def train(self):
@@ -90,9 +91,9 @@ class Trainer:
         if self.config["train"].get("scheduler"):
             if self.config["train"]["scheduler"]["type"] == "cosine":
                 total_steps = (
-                    self.config["train"]["n_epochs"]
-                    * len(tokenized_datasets[self.config["data"]["split"]])
-                    // self.config["train"]["batch_size"]
+                        self.config["train"]["n_epochs"]
+                        * len(tokenized_datasets[self.config["data"]["split"]])
+                        // self.config["train"]["batch_size"]
                 )
                 warmup_steps = self.config["train"]["scheduler"]["warmup_steps"]
                 scheduler = optax.linear_schedule(
@@ -151,13 +152,13 @@ class Trainer:
         step = 0
         for epoch in range(n_epochs):
             for batch in tqdm(
-                data_loader(
-                    tokenized_datasets["train"],
-                    batch_size,
-                    self.config["model"]["seq_len"],
-                ),
-                total=len(tokenized_datasets["train"]) // batch_size,
-                desc=f"Epoch {epoch + 1}",
+                    data_loader(
+                        tokenized_datasets["train"],
+                        batch_size,
+                        self.config["model"]["seq_len"],
+                    ),
+                    total=len(tokenized_datasets["train"]) // batch_size,
+                    desc=f"Epoch {epoch + 1}",
             ):
                 batch = batch.reshape(-1, self.config["model"]["seq_len"])
                 inputs, targets = batch[:, :-1], batch[:, 1:]
@@ -170,24 +171,26 @@ class Trainer:
                     os.makedirs(output_dir, exist_ok=True)
 
                     with open(
-                        os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
+                            os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
                     ) as f:
                         pickle.dump(checkpoint, f)
 
                     with open(
-                        os.path.join(output_dir, "config.json"), "w"
+                            os.path.join(output_dir, "config.json"), "w"
                     ) as f:
                         json.dump(self.config["model"], f, indent=4)
 
                 if self.config["train"].get("generate"):
                     if step % self.config["train"]["generate"]["steps"] == 0:
-                        print(
+                        texts = [
                             self.sampler.sample(
                                 self.params,
-                                prompt=self.config["train"]["generate"]["prompt"],
-                                max_length=20,
-                            )
-                        )
+                                prompt=prompt,
+                                max_length=self.config["train"]["generate"]["max_length"],
+                            ) for prompt in self.config["train"]["generate"]["prompts"]
+                        ]
+                        table = wandb.Table(data=texts, columns=["text"])
+                        run.log({"generated_text": table}, step=step)
 
                 if scheduler:
                     run.log(
