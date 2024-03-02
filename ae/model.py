@@ -26,6 +26,17 @@ def apply_rotary_pos_emb(x, sincos):
     return (x * cos) + (rotate_every_two(x) * sin)
 
 
+class LayerNorm(nn.Module):
+    eps: float = 1e-5
+
+    def __call__(self, x):
+        mean = jnp.mean(x, axis=-1, keepdims=True)
+        mean_of_squares = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+        variance = mean_of_squares - jnp.square(mean)
+        inv = 1.0 / jnp.sqrt(variance + self.eps)
+        return inv * (x - mean)
+
+
 class SelfAttentionHead(nn.Module):
     d_model: int
     seq_len: int
@@ -101,11 +112,11 @@ class LM(nn.Module):
         self.attention = SelfAttention(
             n_heads=self.n_heads, d_model=self.d_model, seq_len=self.seq_len
         )
+        self.norms = [LayerNorm() for _ in range(self.n_layers)]
         self.ff = [
             FeedForward(d_model=self.d_model, d_ff=self.d_ff)
             for _ in range(self.n_layers)
         ]
-        self.norm = nn.LayerNorm(self.d_model)
         self.out = nn.Dense(self.vocab_size)
 
     def __call__(self, x):
@@ -113,8 +124,8 @@ class LM(nn.Module):
         x = self.w_e(x)
         x = self.p_e(x)
         x = self.attention(x, x, x, mask)
-        for layer in self.ff:
+        for norm, layer in zip(self.norms, self.ff):
+            x = norm(x)
             x = layer(x)
-        x = self.norm(x)
         x = self.out(x)
         return x
