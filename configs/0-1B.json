@@ -15,14 +15,15 @@
   },
   "train": {
     "batch_size": 32,
-    "n_epochs": 3,
+    "n_epochs": 1,
     "optimizer": {
       "type": "adamw",
       "params": {
-        "learning_rate": 0.001
+        "learning_rate": 0.0001,
+        "clip_norm": 1.0,
+        "accum_steps": 4
       }
     },
-    "clip_grad_norm": 1.0,
     "output_dir": "ae-0-1B",
     "save_checkpoint_steps": 60000
   }
