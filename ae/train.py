@@ -22,6 +22,8 @@ from sampler import Sampler
 from argparse import ArgumentParser
 
 
+# TODO: pjit model parallelism
+
 class Trainer:
     def __init__(self, config):
         self.config = config
@@ -52,7 +54,7 @@ class Trainer:
             vocab_size=vocab_size,
             seq_len=seq_len,
         )
-        x = jnp.ones((1, seq_len), dtype=jnp.int32)
+        x = jnp.ones((1, seq_len), dtype=jnp.bfloat16)
         params = model.init(key, x)
         return model, params
 
@@ -70,6 +72,8 @@ class Trainer:
 
     @partial(jax.jit, static_argnums=(0,))
     def train_step(self, params, optim_state, inputs, targets):
+        inputs = jnp.asarray(inputs, dtype=jnp.bfloat16)
+        targets = jnp.asarray(targets, dtype=jnp.bfloat16)
         loss, grads = jax.value_and_grad(self.loss_fn)(params, inputs, targets)
         updates, optim_state = self.optim.update(grads, optim_state, params)
         params = optax.apply_updates(params, updates)
@@ -113,9 +117,9 @@ class Trainer:
         if self.config["train"].get("scheduler"):
             if self.config["train"]["scheduler"]["type"] == "cosine":
                 total_steps = (
-                    self.config["train"]["n_epochs"]
-                    * len(tokenized_datasets[self.config["data"]["split"]])
-                    // self.config["train"]["batch_size"]
+                        self.config["train"]["n_epochs"]
+                        * len(tokenized_datasets[self.config["data"]["split"]])
+                        // self.config["train"]["batch_size"]
                 )
                 warmup_steps = self.config["train"]["scheduler"]["warmup_steps"]
                 scheduler = optax.linear_schedule(
@@ -175,13 +179,13 @@ class Trainer:
 
         for epoch in range(n_epochs):
             for batch in tqdm(
-                data_loader(
-                    tokenized_datasets["train"],
-                    batch_size,
-                    self.config["model"]["seq_len"],
-                ),
-                total=len(tokenized_datasets["train"]) // batch_size,
-                desc=f"Epoch {epoch + 1}",
+                    data_loader(
+                        tokenized_datasets["train"],
+                        batch_size,
+                        self.config["model"]["seq_len"],
+                    ),
+                    total=len(tokenized_datasets["train"]) // batch_size,
+                    desc=f"Epoch {epoch + 1}",
             ):
                 batch = batch.reshape(-1, self.config["model"]["seq_len"])
                 inputs, targets = batch[:, :-1], batch[:, 1:]
@@ -193,11 +197,11 @@ class Trainer:
                 step += 1
 
                 if step % save_checkpoint_steps == 0:
-                    checkpoint = {"params": self.params}
+                    checkpoint = {"params": jax.tree_map(lambda x: jnp.asarray(x, dtype=jnp.int32), self.params)}
                     os.makedirs(output_dir, exist_ok=True)
 
                     with open(
-                        os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
+                            os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
                     ) as f:
                         pickle.dump(checkpoint, f)
 
