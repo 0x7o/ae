@@ -18,7 +18,7 @@
     "optimizer": {
       "type": "adamw",
       "params": {
-        "learning_rate": 4e-5,
+        "learning_rate": 0.0005,
         "clip_norm": 0.5,
         "accum_steps": 4
       }
