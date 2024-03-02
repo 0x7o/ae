@@ -25,9 +25,7 @@
     },
     "scheduler": {
       "type": "cosine",
-      "params": {
-        "warmup_steps": 100
-      }
+      "warmup_steps": 100
     },
     "generate": {
         "steps": 1000,
