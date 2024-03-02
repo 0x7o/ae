@@ -14,27 +14,31 @@
   },
   "train": {
     "batch_size": 16,
-    "n_epochs": 3,
+    "n_epochs": 2,
     "dtype": "bfloat16",
     "optimizer": {
       "type": "adamw",
       "params": {
-        "learning_rate": 0.0002,
-        "clip_norm": 1.0,
-        "accum_steps": 1
+        "learning_rate": 0.001,
+        "clip_norm": 0.5,
+        "accum_steps": 4
       }
     },
-    "clip_grad_norm": 1.0,
-    "output_dir": "ae-0-3B",
-    "save_checkpoint_steps": 1000,
+    "scheduler": {
+      "type": "cosine",
+      "warmup_steps": 100
+    },
     "generate": {
         "steps": 1000,
-        "max_length": 20,
+        "max_length": 48,
         "prompts": [
           "Once upon a time",
           "In a galaxy far far away",
-          "In a world where"
+          "In a world where",
+          "The quick brown fox jumps over the"
         ]
-    }
+    },
+    "output_dir": "ae-0-1B",
+    "save_checkpoint_steps": 1000
   }
 }
