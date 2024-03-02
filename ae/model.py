@@ -104,7 +104,6 @@ class Block(nn.Module):
 
 class LM(nn.Module):
     d_model: int
-    d_ff: int
     n_heads: int
     n_layers: int
     vocab_size: int

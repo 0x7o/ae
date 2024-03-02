@@ -43,11 +43,10 @@ class Trainer:
 
         self.optim = None
 
-    def init_model(self, d_model, d_ff, n_heads, n_layers, vocab_size, seq_len):
+    def init_model(self, d_model, n_heads, n_layers, vocab_size, seq_len):
         key = jax.random.PRNGKey(0)
         model = LM(
             d_model=d_model,
-            d_ff=d_ff,
             n_heads=n_heads,
             n_layers=n_layers,
             vocab_size=vocab_size,
