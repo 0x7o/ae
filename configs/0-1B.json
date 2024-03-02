@@ -19,7 +19,7 @@
     "optimizer": {
       "type": "adamw",
       "params": {
-        "learning_rate": 0.0002
+        "learning_rate": 0.001
       }
     },
     "clip_grad_norm": 1.0,
