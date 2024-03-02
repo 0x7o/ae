@@ -13,7 +13,7 @@
     "tokenizer": "gpt2"
   },
   "train": {
-    "batch_size": 16,
+    "batch_size": 8,
     "n_epochs": 2,
     "dtype": "bfloat16",
     "optimizer": {
@@ -38,7 +38,7 @@
           "The quick brown fox jumps over the"
         ]
     },
-    "output_dir": "ae-0-1B",
+    "output_dir": "ae-0-5B",
     "save_checkpoint_steps": 1000
   }
 }
