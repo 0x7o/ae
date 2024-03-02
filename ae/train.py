@@ -22,6 +22,9 @@ from sampler import Sampler
 from argparse import ArgumentParser
 
 
+# TODO: restoring from checkpoint
+# TODO: fix value error in last epoch batch
+
 class Trainer:
     def __init__(self, config):
         self.config = config
@@ -122,9 +125,9 @@ class Trainer:
         if self.config["train"].get("scheduler"):
             if self.config["train"]["scheduler"]["type"] == "cosine":
                 total_steps = (
-                    self.config["train"]["n_epochs"]
-                    * len(tokenized_datasets[self.config["data"]["split"]])
-                    // self.config["train"]["batch_size"]
+                        self.config["train"]["n_epochs"]
+                        * len(tokenized_datasets[self.config["data"]["split"]])
+                        // self.config["train"]["batch_size"]
                 )
                 warmup_steps = self.config["train"]["scheduler"]["warmup_steps"]
                 scheduler = optax.linear_schedule(
@@ -184,22 +187,22 @@ class Trainer:
 
         for epoch in range(n_epochs):
             for i, batch in enumerate(
-                tqdm(
-                    data_loader(
-                        tokenized_datasets["train"],
-                        batch_size,
-                        self.config["model"]["seq_len"],
-                    ),
-                    total=len(tokenized_datasets["train"]) // batch_size,
-                    desc=f"Epoch {epoch + 1}",
-                )
+                    tqdm(
+                        data_loader(
+                            tokenized_datasets["train"],
+                            batch_size,
+                            self.config["model"]["seq_len"],
+                        ),
+                        total=len(tokenized_datasets["train"]) // batch_size,
+                        desc=f"Epoch {epoch + 1}",
+                    )
             ):
                 batch = batch.reshape(-1, self.config["model"]["seq_len"])
                 inputs, targets = batch[:, :-1], batch[:, 1:]
 
                 if (
-                    i == len(tokenized_datasets["train"]) // batch_size - 1
-                    and len(inputs) % len(self.devices) != 0
+                        i == len(tokenized_datasets["train"]) // batch_size - 1
+                        and len(inputs) % len(self.devices) != 0
                 ):
                     continue
 
@@ -219,7 +222,7 @@ class Trainer:
                     os.makedirs(output_dir, exist_ok=True)
 
                     with open(
-                        os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
+                            os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
                     ) as f:
                         pickle.dump(checkpoint, f)
 
@@ -235,6 +238,9 @@ class Trainer:
                                     prompt=prompt,
                                     max_length=self.config["train"]["generate"][
                                         "max_length"
+                                    ],
+                                    temperature=self.config["train"]["generate"][
+                                        "temperature"
                                     ],
                                 )
                             ]

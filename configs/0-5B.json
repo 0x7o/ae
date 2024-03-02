@@ -29,8 +29,9 @@
       "warmup_steps": 100
     },
     "generate": {
-        "steps": 1000,
-        "max_length": 48,
+      "steps": 1000,
+      "max_length": 48,
+      "temperature": 0.7,
         "prompts": [
           "Once upon a time",
           "In a galaxy far far away",
