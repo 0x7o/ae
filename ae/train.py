@@ -207,13 +207,15 @@ class Trainer:
                 if self.config["train"].get("generate"):
                     if step % self.config["train"]["generate"]["steps"] == 0:
                         texts = [
-                            self.sampler.sample(
-                                self.params,
-                                prompt=prompt,
-                                max_length=self.config["train"]["generate"][
-                                    "max_length"
-                                ],
-                            )
+                            [
+                                self.sampler.sample(
+                                    self.params,
+                                    prompt=prompt,
+                                    max_length=self.config["train"]["generate"][
+                                        "max_length"
+                                    ],
+                                )
+                            ]
                             for prompt in self.config["train"]["generate"]["prompts"]
                         ]
                         table = wandb.Table(data=texts, columns=["text"])
