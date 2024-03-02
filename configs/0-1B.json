@@ -24,6 +24,15 @@
         "accum_steps": 4
       }
     },
+    "generate": {
+        "steps": 1000,
+        "max_length": 20,
+        "prompts": [
+          "Once upon a time",
+          "In a galaxy far far away",
+          "In a world where"
+        ]
+    },
     "output_dir": "ae-0-1B",
     "save_checkpoint_steps": 60000
   }
