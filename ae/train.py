@@ -41,6 +41,8 @@ class Trainer:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        self.optim = None
+
     def init_model(self, d_model, d_ff, n_heads, n_layers, vocab_size, seq_len):
         key = jax.random.PRNGKey(0)
         model = LM(
@@ -67,12 +69,12 @@ class Trainer:
         logits = self.model.apply(params, inputs)
         return self.cross_entropy(logits, targets, axis=-1)
 
-    @partial(jax.jit, static_argnums=(0, 1))
-    def train_step(self, optim, optim_state, inputs, targets):
-        loss, grads = jax.value_and_grad(self.loss_fn)(self.params, inputs, targets)
-        updates, optim_state = optim.update(grads, optim_state, self.params)
-        self.params = optax.apply_updates(self.params, updates)
-        return loss, optim_state
+    @partial(jax.jit, static_argnums=(0, ))
+    def train_step(self, params, optim_state, inputs, targets):
+        loss, grads = jax.value_and_grad(self.loss_fn)(params, inputs, targets)
+        updates, optim_state = self.optim.update(grads, optim_state, params)
+        params = optax.apply_updates(params, updates)
+        return params, loss, optim_state
 
     def train(self):
         def tokenize_function(examples):
@@ -149,8 +151,9 @@ class Trainer:
                     buffer = buffer[seq_len:]
 
         run = wandb.init(project="ae-dev", config=self.config)
-
+        self.optim = optim
         step = 0
+
         for epoch in range(n_epochs):
             for batch in tqdm(
                 data_loader(
@@ -164,7 +167,8 @@ class Trainer:
                 batch = batch.reshape(-1, self.config["model"]["seq_len"])
                 inputs, targets = batch[:, :-1], batch[:, 1:]
                 inputs, targets = jax.device_put((inputs, targets), self.shard)
-                loss, optim_state = self.train_step(optim, optim_state, inputs, targets)
+                params, loss, optim_state = self.train_step(self.params, optim_state, inputs, targets)
+                self.params = params
                 step += 1
 
                 if step % save_checkpoint_steps == 0:
