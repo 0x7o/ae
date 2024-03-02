@@ -15,6 +15,7 @@
   "train": {
     "batch_size": 32,
     "n_epochs": 5,
+    "dtype": "bfloat16",
     "optimizer": {
       "type": "adamw",
       "params": {
