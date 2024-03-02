@@ -29,6 +29,14 @@ class Trainer:
     def __init__(self, config):
         self.config = config
         self.devices = jax.devices()
+
+        if self.config["train"]["dtype"] == "float32":
+            self.dtype = jnp.float32
+        elif self.config["train"]["dtype"] == "bfloat16":
+            self.dtype = jnp.bfloat16
+        else:
+            raise ValueError("Invalid dtype")
+
         self.devices = mesh_utils.create_device_mesh((len(jax.devices()), 1))
         print("Devices: ", self.devices)
         self.shard = PositionalSharding(self.devices)
@@ -54,8 +62,9 @@ class Trainer:
             n_layers=n_layers,
             vocab_size=vocab_size,
             seq_len=seq_len,
+            dtype=self.dtype,
         )
-        x = jnp.ones((1, seq_len), dtype=jnp.bfloat16)
+        x = jnp.ones((1, seq_len), dtype=jnp.int32)
         params = model.init(key, x)
         return model, params
 
@@ -64,7 +73,7 @@ class Trainer:
         nll = jnp.take_along_axis(
             logprobs, jnp.expand_dims(targets, axis=axis), axis=axis
         )
-        cross_entropy = -jnp.mean(nll)
+        cross_entropy = -jnp.mean(nll, dtype=self.dtype)
         return cross_entropy
 
     def loss_fn(self, params, inputs, targets):
@@ -73,8 +82,6 @@ class Trainer:
 
     @partial(jax.jit, static_argnums=(0,))
     def train_step(self, params, optim_state, inputs, targets):
-        inputs = jnp.asarray(inputs, dtype=jnp.bfloat16)
-        targets = jnp.asarray(targets, dtype=jnp.bfloat16)
         loss, grads = jax.value_and_grad(self.loss_fn)(params, inputs, targets)
         updates, optim_state = self.optim.update(grads, optim_state, params)
         params = optax.apply_updates(params, updates)
