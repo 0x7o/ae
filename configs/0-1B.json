@@ -27,7 +27,7 @@
     "save_checkpoint_steps": 1000,
     "generate": {
       "steps": 100,
-      "max_length": 10,
+      "max_length": 64,
       "prompts": [
         "Neural network is",
         "I am",
