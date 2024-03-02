@@ -18,9 +18,15 @@
     "optimizer": {
       "type": "adamw",
       "params": {
-        "learning_rate": 0.0002,
+        "learning_rate": 4e-5,
         "clip_norm": 0.5,
         "accum_steps": 4
+      }
+    },
+    "scheduler": {
+      "type": "cosine",
+      "params": {
+        "warmup_steps": 100
       }
     },
     "generate": {
