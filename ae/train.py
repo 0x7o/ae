@@ -37,7 +37,7 @@ class Trainer:
         else:
             raise ValueError("Invalid dtype")
 
-        self.devices = mesh_utils.create_device_mesh((1,))
+        self.devices = mesh_utils.create_device_mesh((2, 4))
         print("Devices: ", self.devices)
         self.mesh = Mesh(devices=self.devices, axis_names=("data", "model"))
         self.data_sharding = NamedSharding(self.mesh, PartitionSpec("data", None))
