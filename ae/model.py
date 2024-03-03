@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 from einops import rearrange, repeat
 from jax.sharding import NamedSharding, PartitionSpec, Mesh
-from flax.experimental.nnx import with_sharding_constraint
+from jax.lax import with_sharding_constraint
 
 
 def create_mask(seq_len, dtype: jnp.dtype = jnp.float32):
