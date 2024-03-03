@@ -25,6 +25,7 @@ from argparse import ArgumentParser
 # TODO: restoring from checkpoint
 # TODO: fix value error in last epoch batch
 
+
 class Trainer:
     def __init__(self, config):
         self.config = config
@@ -121,14 +122,14 @@ class Trainer:
             raise ValueError("Invalid optimizer type")
 
         scheduler = None
+        total_steps = (
+                self.config["train"]["n_epochs"]
+                * len(tokenized_datasets[self.config["data"]["split"]])
+                // self.config["train"]["batch_size"]
+        )
 
         if self.config["train"].get("scheduler"):
             if self.config["train"]["scheduler"]["type"] == "cosine":
-                total_steps = (
-                        self.config["train"]["n_epochs"]
-                        * len(tokenized_datasets[self.config["data"]["split"]])
-                        // self.config["train"]["batch_size"]
-                )
                 warmup_steps = self.config["train"]["scheduler"]["warmup_steps"]
                 scheduler = optax.linear_schedule(
                     init_value=0.0,
@@ -162,99 +163,107 @@ class Trainer:
         np.random.shuffle(indices)
 
         def data_loader(dataset, batch_size, seq_len):
-            buffer = []
+            while True:
+                buffer = []
 
-            for example in dataset:
-                example["input_ids"].append(self.tokenizer.eos_token_id)
-                buffer.extend(example["input_ids"])
+                for example in dataset:
+                    example["input_ids"].append(self.tokenizer.eos_token_id)
+                    buffer.extend(example["input_ids"])
 
-                while len(buffer) >= seq_len * batch_size:
-                    batch = []
-                    for _ in range(batch_size):
-                        batch.append(buffer[:seq_len])
+                    while len(buffer) >= seq_len * batch_size:
+                        batch = []
+                        for _ in range(batch_size):
+                            batch.append(buffer[:seq_len])
+                            buffer = buffer[seq_len:]
+                        yield np.array(batch)
+
+                if buffer:
+                    remaining = len(buffer) // seq_len
+                    for _ in range(remaining):
+                        yield np.array(buffer[:seq_len])
                         buffer = buffer[seq_len:]
-                    yield np.array(batch)
-
-            if buffer:
-                remaining = len(buffer) // seq_len
-                for _ in range(remaining):
-                    yield np.array(buffer[:seq_len])
-                    buffer = buffer[seq_len:]
 
         run = wandb.init(project="ae-dev", config=self.config)
         self.optim = optim
         step = 0
+        bar = tqdm(
+            data_loader(
+                tokenized_datasets["train"],
+                batch_size,
+                self.config["model"]["seq_len"],
+            ),
+            total=total_steps,
+            desc="Training...",
+        )
 
-        for epoch in range(n_epochs):
-            for i, batch in enumerate(
-                    tqdm(
-                        data_loader(
-                            tokenized_datasets["train"],
-                            batch_size,
-                            self.config["model"]["seq_len"],
-                        ),
-                        total=len(tokenized_datasets["train"]) // batch_size,
-                        desc=f"Epoch {epoch + 1}",
+        for i, batch in enumerate(bar):
+            batch = batch.reshape(-1, self.config["model"]["seq_len"])
+            inputs, targets = batch[:, :-1], batch[:, 1:]
+
+            if len(inputs) % len(self.devices) != 0:
+                print(f"Skipping batch {i} due to sharding")
+                continue
+
+            inputs, targets = jax.device_put((inputs, targets), self.shard)
+            params, loss, optim_state = self.train_step(
+                self.params, optim_state, inputs, targets
+            )
+            self.params = params
+            bar.set_postfix({"loss": loss}, refresh=False)
+            step += 1
+
+            if step % save_checkpoint_steps == 0:
+                print(f"\n*** Saving checkpoint at step {step} ***")
+                checkpoint = {
+                    "params": jax.tree_map(
+                        lambda x: jnp.asarray(x, dtype=jnp.int32), self.params
                     )
-            ):
-                batch = batch.reshape(-1, self.config["model"]["seq_len"])
-                inputs, targets = batch[:, :-1], batch[:, 1:]
+                }
+                os.makedirs(output_dir, exist_ok=True)
 
-                if (
-                        i == len(tokenized_datasets["train"]) // batch_size - 1
-                        and len(inputs) % len(self.devices) != 0
-                ):
-                    continue
+                with open(os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb") as f:
+                    pickle.dump(checkpoint, f)
 
-                inputs, targets = jax.device_put((inputs, targets), self.shard)
-                params, loss, optim_state = self.train_step(
-                    self.params, optim_state, inputs, targets
-                )
-                self.params = params
-                step += 1
+                with open(os.path.join(output_dir, "config.json"), "w") as f:
+                    json.dump(self.config["model"], f, indent=4)
 
-                if step % save_checkpoint_steps == 0:
-                    checkpoint = {
-                        "params": jax.tree_map(
-                            lambda x: jnp.asarray(x, dtype=jnp.int32), self.params
-                        )
-                    }
-                    os.makedirs(output_dir, exist_ok=True)
+                print(f"Checkpoint saved to {output_dir}")
 
-                    with open(
-                            os.path.join(output_dir, f"checkpoint_{step}.pt"), "wb"
-                    ) as f:
-                        pickle.dump(checkpoint, f)
-
-                    with open(os.path.join(output_dir, "config.json"), "w") as f:
-                        json.dump(self.config["model"], f, indent=4)
-
-                if self.config["train"].get("generate"):
-                    if step % self.config["train"]["generate"]["steps"] == 0:
-                        texts = [
-                            [
-                                self.sampler.sample(
-                                    self.params,
-                                    prompt=prompt,
-                                    max_length=self.config["train"]["generate"][
-                                        "max_length"
-                                    ],
-                                    temperature=self.config["train"]["generate"][
-                                        "temperature"
-                                    ],
-                                )
-                            ]
-                            for prompt in self.config["train"]["generate"]["prompts"]
+            if self.config["train"].get("generate"):
+                if step % self.config["train"]["generate"]["steps"] == 0:
+                    print(f"\n*** Generating text at step {step} ***")
+                    texts = [
+                        [
+                            self.sampler.sample(
+                                self.params,
+                                prompt=prompt,
+                                max_length=self.config["train"]["generate"][
+                                    "max_length"
+                                ],
+                                temperature=self.config["train"]["generate"][
+                                    "temperature"
+                                ],
+                            ).replace("\n", "\\n")
                         ]
-                        table = wandb.Table(data=texts, columns=["text"])
-                        run.log({"generated_text": table}, step=step)
+                        for prompt in self.config["train"]["generate"]["prompts"]
+                    ]
+                    table = wandb.Table(data=texts, columns=["text"])
+                    run.log({"generated_text": table}, step=step)
+                    print("Text generated.")
 
-                if scheduler:
-                    run.log(
-                        {"loss": loss, "epoch": epoch, "lr": scheduler(step)}, step=step
-                    )
-                else:
-                    run.log({"loss": loss, "epoch": epoch}, step=step)
+            if scheduler:
+                run.log(
+                    {
+                        "loss": loss,
+                        "lr": scheduler(step),
+                        "epoch": i / (total_steps / n_epochs),
+                    },
+                    step=step,
+                )
+            else:
+                run.log(
+                    {"loss": loss, "epoch": i / (total_steps / n_epochs)}, step=step
+                )
 
 
 if __name__ == "__main__":
