@@ -7,7 +7,7 @@
     "seq_len": 1024
   },
   "data": {
-    "name": "Skylion007/openwebtext",
+    "name": "Elriggs/openwebtext-100k",
     "text_column": "text",
     "split": "train",
     "tokenizer": "gpt2"
