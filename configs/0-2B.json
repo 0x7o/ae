@@ -7,14 +7,14 @@
     "seq_len": 1024
   },
   "data": {
-    "name": "Elriggs/openwebtext-100k",
+    "name": "roneneldan/TinyStories",
     "text_column": "text",
     "split": "train",
     "tokenizer": "gpt2"
   },
   "train": {
     "batch_size": 32,
-    "n_epochs": 5,
+    "n_epochs": 2,
     "dtype": "bfloat16",
     "optimizer": {
       "type": "adamw",
@@ -31,7 +31,7 @@
     "generate": {
       "steps": 1000,
       "max_length": 48,
-      "temperature": 0.7,
+      "temperature": 1.0,
         "prompts": [
           "Once upon a time",
           "In a galaxy far far away",
