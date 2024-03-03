@@ -66,7 +66,7 @@ class Trainer:
             dtype=self.dtype,
             mesh=self.mesh,
         )
-        x = jnp.ones((1, seq_len), dtype=jnp.int32)
+        x = jnp.ones((2, seq_len), dtype=jnp.int32)
         params = model.init(key, x)
         return model, params
 
