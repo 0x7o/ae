@@ -14,7 +14,7 @@
   },
   "train": {
     "batch_size": 32,
-    "n_epochs": 2,
+    "n_epochs": 1,
     "dtype": "bfloat16",
     "optimizer": {
       "type": "adamw",
@@ -26,11 +26,11 @@
     },
     "scheduler": {
       "type": "cosine",
-      "warmup_steps": 200
+      "warmup_steps": 1000
     },
     "generate": {
       "steps": 1000,
-      "max_length": 48,
+      "max_length": 85,
       "temperature": 1.0,
         "prompts": [
           "Once upon a time",
@@ -40,6 +40,6 @@
         ]
     },
     "output_dir": "ae-0-1B",
-    "save_checkpoint_steps": 1000
+    "save_checkpoint_steps": 5000
   }
 }
