@@ -13,7 +13,7 @@ class Sampler:
         self,
         model: LM,
         tokenizer: AutoTokenizer,
-        shard: jax.sharding.PositionalSharding,
+        shard: jax.sharding.NamedSharding,
     ):
         self.model = model
         self.tokenizer = tokenizer

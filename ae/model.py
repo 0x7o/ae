@@ -1,6 +1,10 @@
+from typing import Callable
+
 import jax.numpy as jnp
 import flax.linen as nn
 from einops import rearrange, repeat
+from jax.sharding import NamedSharding, PartitionSpec, Mesh
+from flax.experimental.nnx import with_sharding_constraint
 
 
 def create_mask(seq_len, dtype: jnp.dtype = jnp.float32):
@@ -56,10 +60,15 @@ class SelfAttention(nn.Module):
     d_model: int
     seq_len: int
     dtype: jnp.dtype = jnp.float32
+    dense_init: Callable = nn.initializers.xavier_normal()
 
     def setup(self) -> None:
         self.heads = [SelfAttentionHead() for _ in range(self.n_heads)]
-        self.out = nn.Dense(self.d_model, dtype=self.dtype)
+        self.out = nn.Dense(
+            self.d_model,
+            dtype=self.dtype,
+            kernel_init=nn.with_partitioning(self.dense_init, ("model", None)),
+        )
 
     def __call__(self, v, k, q, wi, mask=None):
         outputs = [head(v, k, q, wi, mask) for head in self.heads]
@@ -92,6 +101,7 @@ class Block(nn.Module):
     n_heads: int
     seq_len: int
     dtype: jnp.dtype = jnp.float32
+    dense_init: Callable = nn.initializers.xavier_normal()
 
     def setup(self) -> None:
         self.attention = SelfAttention(
@@ -102,7 +112,9 @@ class Block(nn.Module):
         )
         self.norm = LayerNorm(dtype=self.dtype)
         self.wi = self.param(
-            "wi", nn.initializers.xavier_uniform(), (self.d_model, self.d_model)
+            "wi",
+            nn.with_partitioning(self.dense_init, ("model", None)),
+            (self.d_model, self.d_model),
         )
         self.ff = FeedForward()
 
@@ -119,7 +131,9 @@ class LM(nn.Module):
     n_layers: int
     vocab_size: int
     seq_len: int
+    mesh: Mesh
     dtype: jnp.dtype = jnp.float32
+    dense_init: Callable = nn.initializers.xavier_normal()
 
     def setup(self) -> None:
         self.w_e = nn.Embed(self.vocab_size, self.d_model, dtype=self.dtype)
@@ -133,7 +147,11 @@ class LM(nn.Module):
             )
             for _ in range(self.n_layers)
         ]
-        self.out = nn.Dense(self.vocab_size, dtype=self.dtype)
+        self.out = nn.Dense(
+            self.vocab_size,
+            dtype=self.dtype,
+            kernel_init=nn.with_partitioning(self.dense_init, (None, "model")),
+        )
 
     def __call__(self, x):
         mask = create_mask(x.shape[-1], dtype=self.dtype)
@@ -142,4 +160,7 @@ class LM(nn.Module):
         for block in self.blocks:
             x = block(x, mask)
         x = self.out(x)
+        x = with_sharding_constraint(
+            x, NamedSharding(self.mesh, (PartitionSpec("data", None)))
+        )
         return x

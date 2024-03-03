@@ -11,7 +11,7 @@ import numpy as np
 import jax.numpy as jnp
 import flax.linen as nn
 from jax.experimental import mesh_utils
-from jax.sharding import PositionalSharding
+from jax.sharding import NamedSharding, PartitionSpec, Mesh
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
@@ -23,7 +23,6 @@ from argparse import ArgumentParser
 
 
 # TODO: restoring from checkpoint
-# TODO: fix value error in last epoch batch
 
 
 class Trainer:
@@ -38,9 +37,10 @@ class Trainer:
         else:
             raise ValueError("Invalid dtype")
 
-        self.devices = mesh_utils.create_device_mesh((len(jax.devices()), 1))
+        self.devices = mesh_utils.create_device_mesh((1,))
         print("Devices: ", self.devices)
-        self.shard = PositionalSharding(self.devices)
+        self.mesh = Mesh(devices=self.devices, axis_names=("data", "model"))
+        self.data_sharding = NamedSharding(self.mesh, PartitionSpec("data", None))
         self.model, self.params = self.init_model(**config["model"])
         print(f"Model {config['model']} initialized.")
         print(
@@ -48,7 +48,7 @@ class Trainer:
         )
         self.dataset = load_dataset(config["data"]["name"])
         self.tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
-        self.sampler = Sampler(self.model, self.tokenizer, self.shard)
+        self.sampler = Sampler(self.model, self.tokenizer, self.data_sharding)
 
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -64,6 +64,7 @@ class Trainer:
             vocab_size=vocab_size,
             seq_len=seq_len,
             dtype=self.dtype,
+            mesh=self.mesh,
         )
         x = jnp.ones((1, seq_len), dtype=jnp.int32)
         params = model.init(key, x)
@@ -123,9 +124,9 @@ class Trainer:
 
         scheduler = None
         total_steps = (
-                self.config["train"]["n_epochs"]
-                * len(tokenized_datasets[self.config["data"]["split"]])
-                // self.config["train"]["batch_size"]
+            self.config["train"]["n_epochs"]
+            * len(tokenized_datasets[self.config["data"]["split"]])
+            // self.config["train"]["batch_size"]
         )
 
         if self.config["train"].get("scheduler"):
@@ -204,7 +205,7 @@ class Trainer:
                 print(f"Skipping batch {i} due to sharding")
                 continue
 
-            inputs, targets = jax.device_put((inputs, targets), self.shard)
+            inputs, targets = jax.device_put((inputs, targets), self.data_sharding)
             params, loss, optim_state = self.train_step(
                 self.params, optim_state, inputs, targets
             )
