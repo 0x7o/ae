@@ -184,6 +184,7 @@ class Trainer:
         train_step_pjit = pjit(
             self.train_step,
             in_shardings=(
+                None,
                 PartitionSpec("vocab", "embed"),
                 None,
                 PartitionSpec("data", None),
@@ -194,6 +195,7 @@ class Trainer:
                 None,
                 None,
             ),
+            static_argnums=(0),
         )
 
         def data_loader(dataset, batch_size, seq_len):
