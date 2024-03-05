@@ -195,7 +195,7 @@ class Trainer:
                 None,
                 None,
             ),
-            static_argnums=(0),
+            static_argnums=(0, ),
         )
 
         def data_loader(dataset, batch_size, seq_len):
