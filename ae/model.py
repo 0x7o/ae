@@ -1,10 +1,8 @@
-from typing import Callable
-
 import jax.numpy as jnp
 import flax.linen as nn
+from flax.linen.partitioning import param_with_axes
+from jax.sharding import PartitionSpec
 from einops import rearrange, repeat
-from jax.sharding import NamedSharding, PartitionSpec, Mesh
-from jax.lax import with_sharding_constraint
 
 
 def create_mask(seq_len, dtype: jnp.dtype = jnp.float32):
@@ -34,6 +32,7 @@ class LayerNorm(nn.Module):
     eps: float = 1e-5
     dtype: jnp.dtype = jnp.float32
 
+    @nn.compact
     def __call__(self, x):
         mean = jnp.mean(x, axis=-1, keepdims=True, dtype=self.dtype)
         mean_of_squares = jnp.mean(
@@ -45,6 +44,7 @@ class LayerNorm(nn.Module):
 
 
 class SelfAttentionHead(nn.Module):
+    @nn.compact
     def __call__(self, v, k, q, wi, mask=None):
         q = q @ wi
         k = k @ wi
@@ -60,19 +60,18 @@ class SelfAttention(nn.Module):
     d_model: int
     seq_len: int
     dtype: jnp.dtype = jnp.float32
-    dense_init: Callable = nn.initializers.xavier_normal()
 
-    def setup(self) -> None:
-        self.heads = [SelfAttentionHead() for _ in range(self.n_heads)]
-        self.out = nn.Dense(
+    @nn.compact
+    def __call__(self, v, k, q, wi, mask=None):
+        heads = [SelfAttentionHead(name=f"head_{i}") for i in range(self.n_heads)]
+        outputs = [head(v, k, q, wi, mask) for head in heads]
+        out = nn.Dense(
             self.d_model,
             dtype=self.dtype,
-            kernel_init=nn.with_partitioning(self.dense_init, ("model", None)),
+            kernel_init=nn.initializers.xavier_uniform(),
+            name="out",
         )
-
-    def __call__(self, v, k, q, wi, mask=None):
-        outputs = [head(v, k, q, wi, mask) for head in self.heads]
-        return self.out(jnp.concatenate(outputs, axis=-1, dtype=self.dtype))
+        return out(jnp.concatenate(outputs, axis=-1, dtype=self.dtype))
 
 
 class PositionEncoding(nn.Module):
@@ -90,6 +89,7 @@ class PositionEncoding(nn.Module):
 
 
 class FeedForward(nn.Module):
+    @nn.compact
     def __call__(self, x, wi):
         x = nn.swish(x @ wi)
         x = x @ wi
@@ -101,27 +101,27 @@ class Block(nn.Module):
     n_heads: int
     seq_len: int
     dtype: jnp.dtype = jnp.float32
-    dense_init: Callable = nn.initializers.xavier_normal()
 
-    def setup(self) -> None:
-        self.attention = SelfAttention(
+    @nn.compact
+    def __call__(self, x, mask=None):
+        attention = SelfAttention(
             n_heads=self.n_heads,
             d_model=self.d_model,
             seq_len=self.seq_len,
             dtype=self.dtype,
+            name="attention",
         )
-        self.norm = LayerNorm(dtype=self.dtype)
-        self.wi = self.param(
+        norm = LayerNorm(dtype=self.dtype, name="norm")
+        wi = self.param(
             "wi",
-            nn.with_partitioning(self.dense_init, ("model", None)),
+            nn.initializers.xavier_uniform(),
             (self.d_model, self.d_model),
         )
-        self.ff = FeedForward()
+        ff = FeedForward(name="ff")
 
-    def __call__(self, x, mask=None):
-        x = self.attention(x, x, x, self.wi, mask)
-        x = self.norm(x)
-        x = self.ff(x, self.wi)
+        x = attention(x, x, x, wi, mask)
+        x = norm(x)
+        x = ff(x, wi)
         return x
 
 
@@ -131,36 +131,88 @@ class LM(nn.Module):
     n_layers: int
     vocab_size: int
     seq_len: int
-    mesh: Mesh
     dtype: jnp.dtype = jnp.float32
-    dense_init: Callable = nn.initializers.xavier_normal()
 
-    def setup(self) -> None:
-        self.w_e = nn.Embed(self.vocab_size, self.d_model, dtype=self.dtype)
-        self.p_e = PositionEncoding(d_model=self.d_model, dtype=self.dtype)
-        self.blocks = [
-            Block(
+    @nn.compact
+    def __call__(self, x):
+        mask = create_mask(x.shape[-1], dtype=self.dtype)
+
+        def w_e_init(key, shape, dtype=self.dtype):
+            return param_with_axes(
+                "w_e",
+                nn.initializers.normal(stddev=0.02),
+                (self.vocab_size, self.d_model),
+                axes=("vocab", "embed"),
+            )
+
+        p_e = PositionEncoding(d_model=self.d_model, dtype=self.dtype, name="p_e")
+
+        def out_init(key, shape, dtype=self.dtype):
+            return param_with_axes(
+                "out",
+                nn.initializers.xavier_uniform(),
+                (self.d_model, self.vocab_size),
+                axes=("embed", "vocab"),
+            )
+
+        x = nn.Embed(self.vocab_size, self.d_model, dtype=self.dtype, embedding_init=w_e_init)(x)
+        x = p_e(x)
+
+        for i in range(self.n_layers):
+            block = Block(
                 d_model=self.d_model,
                 n_heads=self.n_heads,
                 seq_len=self.seq_len,
                 dtype=self.dtype,
+                name=f"block_{i}",
             )
-            for _ in range(self.n_layers)
-        ]
-        self.out = nn.Dense(
+            x = block(x, mask)
+
+        x = nn.Dense(
             self.vocab_size,
             dtype=self.dtype,
-            kernel_init=nn.with_partitioning(self.dense_init, (None, "model")),
-        )
-
-    def __call__(self, x):
-        mask = create_mask(x.shape[-1], dtype=self.dtype)
-        x = self.w_e(x)
-        x = self.p_e(x)
-        for block in self.blocks:
-            x = block(x, mask)
-        x = self.out(x)
-        x = with_sharding_constraint(
-            x, NamedSharding(self.mesh, (PartitionSpec("data", None)))
-        )
+            kernel_init=out_init,
+            name="out",
+        )(x)
         return x
+
+    def get_partitioning(self):
+        return {
+            "params": {
+                "w_e": PartitionSpec("vocab", "embed"),
+                "out": {
+                    "kernel": PartitionSpec("embed", "vocab"),
+                    "bias": PartitionSpec("vocab"),
+                },
+                "p_e": {
+                    "scale": PartitionSpec("embed"),
+                    "bias": PartitionSpec("embed"),
+                },
+                **{
+                    f"block_{i}": {
+                        "attention": {
+                            "out": {
+                                "kernel": PartitionSpec("embed", "embed"),
+                                "bias": PartitionSpec("embed"),
+                            },
+                            **{
+                                f"head_{j}": {
+                                    "kernel": PartitionSpec("embed", "embed"),
+                                    "bias": PartitionSpec("embed"),
+                                }
+                                for j in range(self.n_heads)
+                            },
+                        },
+                        "norm": {
+                            "scale": PartitionSpec("embed"),
+                            "bias": PartitionSpec("embed"),
+                        },
+                        "ff": {
+                            "wi": PartitionSpec("embed", "embed"),
+                        },
+                    }
+                    for i in range(self.n_layers)
+                },
+            }
+        }
+

@@ -10,6 +10,7 @@ import pickle
 import numpy as np
 import jax.numpy as jnp
 import flax.linen as nn
+from jax.experimental.pjit import pjit
 from jax.experimental import mesh_utils
 from jax.sharding import NamedSharding, PartitionSpec, Mesh
 
@@ -39,10 +40,28 @@ class Trainer:
 
         self.devices = mesh_utils.create_device_mesh((2, 4))
         print("Devices: ", self.devices)
-        self.mesh = Mesh(devices=self.devices, axis_names=("data", "model"))
+        self.model = self.init_model(**config["model"])
+        self.mesh = Mesh(devices=self.devices, axis_names=("vocab", "embed"))
+
+        def init_fn(rng, x):
+            return self.model.init(rng, x)
+
+        init_fn_pjit = jax.experimental.maps.xmap(
+            init_fn,
+            in_axes=(['params'], ['data', ...]),
+            out_axes=['params', 'data', ...],
+            axis_resources={'params': PartitionSpec('vocab', 'embed'), 'data': PartitionSpec(None)},
+        )
+
+        self.params = init_fn_pjit(
+            jax.random.PRNGKey(0),
+            jnp.ones((1, config["model"]["seq_len"]), dtype=jnp.int32),
+        )
+
         self.data_sharding = NamedSharding(self.mesh, PartitionSpec("data", None))
-        self.model, self.params = self.init_model(**config["model"])
         print(f"Model {config['model']} initialized.")
+        print("Device assignment:")
+        print(jax.tree_map(lambda x: print(x.device_buffer.device()), self.params))
         print(
             f"{round(sum(p.size for p in jax.tree_util.tree_flatten(self.params)[0]) / 1_000_000, 2)}M parameters"
         )
@@ -56,7 +75,6 @@ class Trainer:
         self.optim = None
 
     def init_model(self, d_model, n_heads, n_layers, vocab_size, seq_len):
-        key = jax.random.PRNGKey(0)
         model = LM(
             d_model=d_model,
             n_heads=n_heads,
@@ -64,11 +82,8 @@ class Trainer:
             vocab_size=vocab_size,
             seq_len=seq_len,
             dtype=self.dtype,
-            mesh=self.mesh,
         )
-        x = jnp.ones((2, seq_len), dtype=jnp.int32)
-        params = model.init(key, x)
-        return model, params
+        return model
 
     def cross_entropy(self, logits, targets, axis=-1):
         logprobs = nn.log_softmax(logits, axis=axis)
@@ -78,13 +93,16 @@ class Trainer:
         cross_entropy = -jnp.mean(nll, dtype=self.dtype)
         return cross_entropy
 
-    def loss_fn(self, params, inputs, targets):
-        logits = self.model.apply(params, inputs)
-        return self.cross_entropy(logits, targets, axis=-1)
-
-    @partial(jax.jit, static_argnums=(0,))
+    @partial(pjit, in_shardings=(
+            PartitionSpec(None), PartitionSpec(None), PartitionSpec("data", None), PartitionSpec("data", None)),
+             out_shardings=(PartitionSpec(None), PartitionSpec(None), PartitionSpec(None)))
     def train_step(self, params, optim_state, inputs, targets):
-        loss, grads = jax.value_and_grad(self.loss_fn)(params, inputs, targets)
+        def loss_fn(params):
+            logits = self.model.apply(params, inputs)
+            return self.cross_entropy(logits, targets, axis=-1)
+
+        loss, grads = jax.value_and_grad(loss_fn)(params)
+        grads = jax.lax.pmean(grads, axis_name="model")
         updates, optim_state = self.optim.update(grads, optim_state, params)
         params = optax.apply_updates(params, updates)
         return params, loss, optim_state
@@ -200,16 +218,11 @@ class Trainer:
         for i, batch in enumerate(bar):
             batch = batch.reshape(-1, self.config["model"]["seq_len"])
             inputs, targets = batch[:, :-1], batch[:, 1:]
-
-            if len(inputs) % len(self.devices) != 0:
-                print(f"Skipping batch {i} due to sharding")
-                continue
-
-            inputs, targets = jax.device_put((inputs, targets), self.data_sharding)
-            params, loss, optim_state = self.train_step(
+            inputs = jax.device_put(inputs, self.data_sharding)
+            targets = jax.device_put(targets, self.data_sharding)
+            self.params, loss, optim_state = self.train_step(
                 self.params, optim_state, inputs, targets
             )
-            self.params = params
             bar.set_postfix({"loss": loss}, refresh=False)
             step += 1
 
