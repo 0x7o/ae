@@ -48,9 +48,12 @@ class Trainer:
 
         init_fn_pjit = jax.experimental.maps.xmap(
             init_fn,
-            in_axes=(['params'], ['data', ...]),
-            out_axes=['params', 'data', ...],
-            axis_resources={'params': PartitionSpec('vocab', 'embed'), 'data': PartitionSpec(None)},
+            in_axes=(["params"], ["data", ...]),
+            out_axes=["params", "data", ...],
+            axis_resources={
+                "params": PartitionSpec("vocab", "embed"),
+                "data": PartitionSpec(None),
+            },
         )
 
         self.params = init_fn_pjit(
@@ -93,9 +96,6 @@ class Trainer:
         cross_entropy = -jnp.mean(nll, dtype=self.dtype)
         return cross_entropy
 
-    @partial(pjit, in_shardings=(
-            PartitionSpec(None), PartitionSpec(None), PartitionSpec("data", None), PartitionSpec("data", None)),
-             out_shardings=(PartitionSpec(None), PartitionSpec(None), PartitionSpec(None)))
     def train_step(self, params, optim_state, inputs, targets):
         def loss_fn(params):
             logits = self.model.apply(params, inputs)
@@ -181,6 +181,21 @@ class Trainer:
         indices = np.arange(len(tokenized_datasets[self.config["data"]["split"]]))
         np.random.shuffle(indices)
 
+        train_step_pjit = pjit(
+            self.train_step,
+            in_shardings=(
+                PartitionSpec("vocab", "embed"),
+                None,
+                PartitionSpec("data", None),
+                PartitionSpec("data", None),
+            ),
+            out_shardings=(
+                PartitionSpec("vocab", "embed"),
+                None,
+                None,
+            ),
+        )
+
         def data_loader(dataset, batch_size, seq_len):
             while True:
                 buffer = []
@@ -220,7 +235,7 @@ class Trainer:
             inputs, targets = batch[:, :-1], batch[:, 1:]
             inputs = jax.device_put(inputs, self.data_sharding)
             targets = jax.device_put(targets, self.data_sharding)
-            self.params, loss, optim_state = self.train_step(
+            self.params, loss, optim_state = train_step_pjit(
                 self.params, optim_state, inputs, targets
             )
             bar.set_postfix({"loss": loss}, refresh=False)

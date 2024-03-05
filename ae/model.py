@@ -155,7 +155,9 @@ class LM(nn.Module):
                 axes=("embed", "vocab"),
             )
 
-        x = nn.Embed(self.vocab_size, self.d_model, dtype=self.dtype, embedding_init=w_e_init)(x)
+        x = nn.Embed(
+            self.vocab_size, self.d_model, dtype=self.dtype, embedding_init=w_e_init
+        )(x)
         x = p_e(x)
 
         for i in range(self.n_layers):
@@ -215,4 +217,3 @@ class LM(nn.Module):
                 },
             }
         }
-
