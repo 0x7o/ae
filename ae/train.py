@@ -33,9 +33,6 @@ class Trainer:
         else:
             raise ValueError("Invalid dtype")
 
-        # Инициализация модели
-        self.model = self.init_model(**config["model"])
-
         # Создаём device mesh с тремя осями: data, model, tensor.
         self.devices = mesh_utils.create_device_mesh((2, 2, 2))
         print("Devices: ", self.devices)
@@ -45,22 +42,22 @@ class Trainer:
         def init_fn(rng, x):
             return self.model.init(rng, x)
 
+        # Объявляем xmap-функцию: для rng не шардируем, для входных данных – по оси "data".
         init_fn_pjit = jax.experimental.maps.xmap(
             init_fn,
-            in_axes=(["params"], ["data", ...]),
-            out_axes=["params", "data", ...],
+            in_axes=(None, "data, ..."),
+            out_axes="params",
             axis_resources={
-                "params": PartitionSpec("model", "tensor"),
                 "data": PartitionSpec("data", None),
+                "params": PartitionSpec("model", "tensor"),
             },
         )
 
-        # Оборачиваем инициализацию в контекст с mesh,
-        # чтобы именованные оси ("data", "model", "tensor") были доступны.
+        # Выполняем инициализацию внутри контекста mesh.
         with self.mesh:
             self.params = init_fn_pjit(
                 jax.random.PRNGKey(0),
-                jnp.ones((1, config["model"]["seq_len"]), dtype=jnp.int32),
+                jnp.ones((1, self.config["model"]["seq_len"]), dtype=jnp.int32),
             )
 
         # Data sharding для входных батчей – шардируем по оси "data".
