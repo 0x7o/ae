@@ -11,9 +11,12 @@ import flax.linen as nn
 from jax.experimental.pjit import pjit
 from jax.experimental import mesh_utils
 from jax.sharding import NamedSharding, PartitionSpec, Mesh
+from jax.sharding import PartitionSpec as P
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
+
+from ae.sharding import DEFAULT_RULES, with_sharding_constraint
 from model import LM  # импорт модели с аннотациями
 from tqdm import tqdm
 from sampler import Sampler  # ваша функция сэмплирования
@@ -37,16 +40,18 @@ class Trainer:
         # Инициализируем параметры с помощью pjit, используя mesh и NamedSharding.
         def init_fn(rng, x):
             return self.model.init(rng, x)
+
         with self.mesh:
-            # Для инициализации входной батч должен быть кратен числу устройств по оси "data" (здесь 2)
-            dummy_input = jnp.ones((2, self.config["model"]["seq_len"]), dtype=jnp.int32)
-            # out_shardings для параметров: модель сама аннотирована, поэтому можно передать None,
-            # либо, если требуется – использовать PartitionSpec("model", "tensor")
-            self.params = pjit(
+            # Создаем dummy input для инициализации
+            dummy_input = jnp.ones((2, config["model"]["seq_len"]), dtype=jnp.int32)
+
+            # Применяем правила шардинга при инициализации
+            init_fn = pjit(
                 init_fn,
-                in_shardings=(None, PartitionSpec("data", None)),
-                out_shardings=PartitionSpec("model", "tensor"),
-            )(jax.random.PRNGKey(0), dummy_input)
+                in_shardings=(None, P("data", None)),
+                out_shardings=DEFAULT_RULES.get_param_spec,
+            )
+            self.params = init_fn(jax.random.PRNGKey(0), dummy_input)
         self.data_sharding = NamedSharding(self.mesh, PartitionSpec("data", None))
         print("Model initialized.")
         self.dataset = load_dataset(config["data"]["name"])
@@ -75,9 +80,18 @@ class Trainer:
 
     def train_step(self, params, optim_state, inputs, targets):
         def loss_fn(params):
-            logits = self.model.apply(params, inputs)
+            # Применяем ограничения шардинга к промежуточным активациям
+            inputs_sharded = with_sharding_constraint(
+                inputs, self.mesh, ("data", None)
+            )
+            logits = self.model.apply(params, inputs_sharded)
+            logits = with_sharding_constraint(
+                logits, self.mesh, ("data", None, "model")
+            )
             return self.cross_entropy(logits, targets, axis=-1)
+
         loss, grads = jax.value_and_grad(loss_fn)(params)
+        # Синхронизируем градиенты между устройствами
         grads = jax.lax.pmean(grads, axis_name="model")
         updates, optim_state = self.optim.update(grads, optim_state, params)
         params = optax.apply_updates(params, updates)

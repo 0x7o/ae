@@ -43,24 +43,25 @@ class FeedForward(nn.Module):
     d_model: int
     ff_mult: int = 4
     dtype: jnp.dtype = jnp.float32
+
     @nn.compact
     def __call__(self, x):
         hidden_dim = self.d_model * self.ff_mult
-        # Параметры wi: аннотированы осью ("model", "data") согласно правилу (можно менять в зависимости от политики)
-        x_proj = nn.Dense(
-            hidden_dim * 2,
-            dtype=self.dtype,
-            name="wi",
-            kernel_init=nn.initializers.xavier_uniform(),
-            )(x)
+
+        def create_dense(features, name):
+            return nn.Dense(
+                features,
+                dtype=self.dtype,
+                name=name,
+                kernel_init=nn.initializers.xavier_uniform(),
+                param_axes={"kernel": ("embed", "ff"), "bias": ("ff",)},
+                kernel_axes=("embed", "ff"),
+                bias_axes=("ff",)
+            )
+
+        x_proj = create_dense(hidden_dim * 2, "wi")(x)
         x1, x2 = jnp.split(x_proj, 2, axis=-1)
-        # Применяем активацию swish (jax.nn.silu) и затем линейную проекцию с аннотацией
-        x_swiglu = nn.Dense(
-            self.d_model,
-            dtype=self.dtype,
-            name="wo",
-            kernel_init=nn.initializers.xavier_uniform(),
-        )(jax.nn.silu(x2) * x1)
+        x_swiglu = create_dense(self.d_model, "wo")(jax.nn.silu(x2) * x1)
         return x_swiglu
 
 # ----------------- Multihead GQA -----------------
@@ -81,32 +82,23 @@ class MultiheadGQA(nn.Module):
         head_dim = self.d_model // self.query_heads
         kv_embed_dim = head_dim * self.kv_heads
 
-        # Для q, k, v задаём Dense с аннотацией осей. Например:
-        q = nn.Dense(
-            self.d_model,
-            dtype=self.dtype,
-            name="q_proj",
-            kernel_init=nn.initializers.xavier_uniform(),
-        )(x)
-        k = nn.Dense(
-            kv_embed_dim,
-            dtype=self.dtype,
-            name="k_proj",
-            kernel_init=nn.initializers.xavier_uniform(),
-        )(x)
-        v = nn.Dense(
-            kv_embed_dim,
-            dtype=self.dtype,
-            name="v_proj",
-            kernel_init=nn.initializers.xavier_uniform(),
-        )(x)
+        def create_dense(features, name):
+            return nn.Dense(
+                features,
+                dtype=self.dtype,
+                name=name,
+                kernel_init=nn.initializers.xavier_uniform(),
+                # Annotate kernel with both model and tensor axes
+                param_axes={"kernel": ("embed", "kv"), "bias": ("kv",)},
+                kernel_axes=("embed", "kv"),
+                # For bias, use only one axis
+                bias_axes=("kv",)
+            )
 
-        # Здесь можно добавить аннотации для q, k, v, если требуется, например с помощью param_with_axes внутри Dense,
-        # но часто достаточно указать их на уровне модуля.
-
-        q = rearrange(q, "b n (h d) -> b n h d", h=self.query_heads)
-        k = rearrange(k, "b n (h d) -> b n h d", h=self.kv_heads)
-        v = rearrange(v, "b n (h d) -> b n h d", h=self.kv_heads)
+        # Use the modified Dense creation for projections
+        q = create_dense(self.d_model, "q_proj")(x)
+        k = create_dense(kv_embed_dim, "k_proj")(x)
+        v = create_dense(kv_embed_dim, "v_proj")(x)
 
         num_head_groups = self.query_heads // self.kv_heads
         q_grouped = rearrange(q, "b n (g h) d -> b g h n d", g=num_head_groups)
@@ -188,24 +180,24 @@ class LM(nn.Module):
     vocab_size: int
     seq_len: int
     dtype: jnp.dtype = jnp.float32
+
     @nn.compact
     def __call__(self, x, is_causal: bool = False):
         mask = create_mask(x.shape[-1], dtype=self.dtype)
 
-        # Пример эмбеддингов с аннотацией: ось "vocab" для строк и "embed" для столбцов.
-        def w_e_init(key, shape, dtype=self.dtype):
-            return param_with_axes(
-                "w_e", nn.initializers.normal(stddev=0.02), shape, dtype, axes=("vocab", "embed")
-            )
         embed = nn.Embed(
             num_embeddings=self.vocab_size,
             features=self.d_model,
-            embedding_init=w_e_init,
+            embedding_init=nn.initializers.normal(stddev=0.02),
             dtype=self.dtype,
+            param_axes={"embedding": ("vocab", "embed")},
+            embedding_axes=("vocab", "embed"),
             name="embed",
         )
+
         x = embed(x)
         x = PositionEncoding(d_model=self.d_model, dtype=self.dtype, name="p_e")(x)
+
         for i in range(self.n_layers):
             x = Block(
                 d_model=self.d_model,
@@ -215,13 +207,18 @@ class LM(nn.Module):
                 dtype=self.dtype,
                 name=f"block_{i}",
             )(x, mask=mask, is_causal=is_causal)
-        x = nn.Dense(
+
+        output_dense = nn.Dense(
             self.vocab_size,
             dtype=self.dtype,
             name="out",
             kernel_init=nn.initializers.xavier_uniform(),
-        )(x)
-        return x
+            param_axes={"kernel": ("embed", "vocab"), "bias": ("vocab",)},
+            kernel_axes=("embed", "vocab"),
+            bias_axes=("vocab",)
+        )
+
+        return output_dense(x)
 
 # ----------------- Пример инициализации модели -----------------
 if __name__ == "__main__":
