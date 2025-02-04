@@ -42,23 +42,16 @@ class Trainer:
         def init_fn(rng, x):
             return self.model.init(rng, x)
 
-        # Объявляем xmap-функцию: для rng не шардируем, для входных данных – по оси "data".
-        init_fn_pjit = jax.experimental.maps.xmap(
-            init_fn,
-            in_axes=(None, "data, ..."),
-            out_axes="params",
-            axis_resources={
-                "data": PartitionSpec("data", None),
-                "params": PartitionSpec("model", "tensor"),
-            },
-        )
-
-        # Выполняем инициализацию внутри контекста mesh.
+        # Используем pjit для инициализации параметров.
+        # Поскольку RNG не шардируем, for RNG используем in_shardings = None.
+        # Для входного батча шардируем по оси "data".
+        # Выход (параметры) шардируем по осям ("model", "tensor").
         with self.mesh:
-            self.params = init_fn_pjit(
-                jax.random.PRNGKey(0),
-                jnp.ones((1, self.config["model"]["seq_len"]), dtype=jnp.int32),
-            )
+            self.params = pjit(
+                init_fn,
+                in_shardings=(None, PartitionSpec("data", None)),
+                out_shardings=PartitionSpec("model", "tensor"),
+            )(jax.random.PRNGKey(0), jnp.ones((1, self.config["model"]["seq_len"]), dtype=jnp.int32))
 
         # Data sharding для входных батчей – шардируем по оси "data".
         self.data_sharding = NamedSharding(self.mesh, PartitionSpec("data", None))
