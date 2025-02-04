@@ -16,7 +16,7 @@ from jax.sharding import PartitionSpec as P
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-from sharding import DEFAULT_RULES, with_sharding_constraint
+from sharding import DEFAULT_RULES, with_sharding_constraint, get_sharding_from_rules
 from model import LM  # импорт модели с аннотациями
 from tqdm import tqdm
 from sampler import Sampler  # ваша функция сэмплирования
@@ -25,35 +25,36 @@ from argparse import ArgumentParser
 class Trainer:
     def __init__(self, config):
         self.config = config
-        if self.config["train"]["dtype"] == "float32":
-            self.dtype = jnp.float32
-        elif self.config["train"]["dtype"] == "bfloat16":
-            self.dtype = jnp.bfloat16
-        else:
-            raise ValueError("Invalid dtype")
-        # Создаём mesh: например, если устройств 8, используем (2,2,2) с осями "data", "model", "tensor"
-        self.devices = mesh_utils.create_device_mesh((2,2,2))
-        print("Devices: ", self.devices)
-        self.mesh = Mesh(devices=self.devices, axis_names=("data", "model", "tensor"))
+        self.dtype = getattr(jnp, config["train"]["dtype"])
+
+        # Создаем mesh для распределенных вычислений
+        devices = mesh_utils.create_device_mesh((2, 2, 2))
+        self.mesh = Mesh(devices, ("data", "model", "tensor"))
+
         # Инициализируем модель
         self.model = self.init_model(**config["model"])
-        # Инициализируем параметры с помощью pjit, используя mesh и NamedSharding.
+
+        # Создаем dummy input и получаем структуру параметров
+        dummy_input = jnp.ones((2, config["model"]["seq_len"]), dtype=jnp.int32)
+        variables = self.model.init(jax.random.PRNGKey(0), dummy_input)
+
+        # Получаем шардинг для всего дерева параметров
+        params_sharding = get_sharding_from_rules(variables['params'], DEFAULT_RULES)
+
         def init_fn(rng, x):
             return self.model.init(rng, x)
 
         with self.mesh:
-            # Создаем dummy input для инициализации
-            dummy_input = jnp.ones((2, config["model"]["seq_len"]), dtype=jnp.int32)
-
-            # Применяем правила шардинга при инициализации
+            # Применяем pjit с корректным шардингом
             init_fn = pjit(
                 init_fn,
                 in_shardings=(None, P("data", None)),
-                out_shardings=DEFAULT_RULES.get_param_spec,
+                out_shardings={"params": params_sharding}
             )
             self.params = init_fn(jax.random.PRNGKey(0), dummy_input)
+
+        print("Model initialized with sharding rules")
         self.data_sharding = NamedSharding(self.mesh, PartitionSpec("data", None))
-        print("Model initialized.")
         self.dataset = load_dataset(config["data"]["name"])
         self.tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
         self.sampler = Sampler(self.model, self.tokenizer, self.data_sharding)
@@ -80,18 +81,16 @@ class Trainer:
 
     def train_step(self, params, optim_state, inputs, targets):
         def loss_fn(params):
-            # Применяем ограничения шардинга к промежуточным активациям
             inputs_sharded = with_sharding_constraint(
                 inputs, self.mesh, ("data", None)
             )
-            logits = self.model.apply(params, inputs_sharded)
+            logits = self.model.apply({"params": params}, inputs_sharded)
             logits = with_sharding_constraint(
                 logits, self.mesh, ("data", None, "model")
             )
             return self.cross_entropy(logits, targets, axis=-1)
 
         loss, grads = jax.value_and_grad(loss_fn)(params)
-        # Синхронизируем градиенты между устройствами
         grads = jax.lax.pmean(grads, axis_name="model")
         updates, optim_state = self.optim.update(grads, optim_state, params)
         params = optax.apply_updates(params, updates)

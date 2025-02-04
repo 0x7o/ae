@@ -6,6 +6,7 @@ import re
 import jax
 from jax.sharding import PartitionSpec as P
 from flax import struct
+import flax.traverse_util as traverse_util
 
 
 @struct.dataclass
@@ -20,28 +21,38 @@ class PartitionRules:
             if isinstance(rule_pattern, str):
                 patterns.append((rule_pattern, rule_spec))
             else:
-                # Если паттерн - это кортеж строк, объединяем их через /
                 pattern = "/".join(rule_pattern)
                 patterns.append((pattern, rule_spec))
         return patterns
 
     def get_param_spec(self, param_name: str) -> P:
         """Получает спецификацию разделения для конкретного параметра."""
+        param_path = param_name.split('/')
         for pattern, spec in self.rules:
             if isinstance(pattern, str):
                 if re.match(pattern, param_name):
                     return spec
             else:
-                # Для паттерна в виде кортежа строк проверяем каждую часть
-                param_parts = param_name.split('/')
-                if len(param_parts) == len(pattern):
+                if len(param_path) == len(pattern):
                     matches = all(
                         re.match(p, part)
-                        for p, part in zip(pattern, param_parts)
+                        for p, part in zip(pattern, param_path)
                     )
                     if matches:
                         return spec
-        return P()  # Возвращаем пустой PartitionSpec, если нет совпадений
+        return P()
+
+
+def get_sharding_from_rules(params_tree, rules: PartitionRules):
+    """Создает дерево PartitionSpec для всех параметров."""
+    flat_params = traverse_util.flatten_dict(params_tree, sep='/')
+    flat_shardings = {}
+
+    for param_name in flat_params.keys():
+        spec = rules.get_param_spec(param_name)
+        flat_shardings[param_name] = spec
+
+    return traverse_util.unflatten_dict(flat_shardings, sep='/')
 
 
 DEFAULT_TRANSFORMER_RULES = [
