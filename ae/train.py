@@ -33,24 +33,18 @@ class Trainer:
         else:
             raise ValueError("Invalid dtype")
 
-        # Создаём device mesh с тремя осями: data, model, tensor.
-        # При наличии 8 устройств можно использовать форму (2, 2, 2)
-        self.devices = mesh_utils.create_device_mesh((2, 2, 2))
-        print("Devices: ", self.devices)
-        # Для параметров используем оси "model" и "tensor"
-        # Для данных – ось "data"
-        self.mesh = Mesh(devices=self.devices, axis_names=("data", "model", "tensor"))
-
         # Инициализация модели
         self.model = self.init_model(**config["model"])
+
+        # Создаём device mesh с тремя осями: data, model, tensor.
+        self.devices = mesh_utils.create_device_mesh((2, 2, 2))
+        print("Devices: ", self.devices)
+        self.mesh = Mesh(devices=self.devices, axis_names=("data", "model", "tensor"))
 
         # Функция инициализации модели.
         def init_fn(rng, x):
             return self.model.init(rng, x)
 
-        # Используем xmap для параллелизации и шардирования инициализации.
-        # Параметры (params) партиционируются по осям ("model", "tensor"),
-        # данные по оси "data".
         init_fn_pjit = jax.experimental.maps.xmap(
             init_fn,
             in_axes=(["params"], ["data", ...]),
@@ -61,10 +55,13 @@ class Trainer:
             },
         )
 
-        self.params = init_fn_pjit(
-            jax.random.PRNGKey(0),
-            jnp.ones((1, config["model"]["seq_len"]), dtype=jnp.int32),
-        )
+        # Оборачиваем инициализацию в контекст с mesh,
+        # чтобы именованные оси ("data", "model", "tensor") были доступны.
+        with self.mesh:
+            self.params = init_fn_pjit(
+                jax.random.PRNGKey(0),
+                jnp.ones((1, config["model"]["seq_len"]), dtype=jnp.int32),
+            )
 
         # Data sharding для входных батчей – шардируем по оси "data".
         self.data_sharding = NamedSharding(self.mesh, PartitionSpec("data", None))
