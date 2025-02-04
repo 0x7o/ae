@@ -28,10 +28,14 @@ def apply_rotary_pos_emb(x, sincos, dtype: jnp.dtype = jnp.float32):
 class RMSNorm(nn.Module):
     eps: float = 1e-8
     dtype: jnp.dtype = jnp.float32
+
     @nn.compact
     def __call__(self, x):
-        rms = jnp.sqrt(jnp.mean(x**2, axis=-1, keepdims=True) + self.eps)
-        scale = self.param_with_axes("scale", nn.initializers.ones, (x.shape[-1],), self.dtype, axes=("embed",))
+        rms = jnp.sqrt(jnp.mean(x ** 2, axis=-1, keepdims=True) + self.eps)
+        # Вызываем param_with_axes напрямую, а не через self.
+        scale = param_with_axes(
+            "scale", nn.initializers.ones, (x.shape[-1],), self.dtype, axes=("embed",)
+        )
         return x / rms * scale
 
 # ----------------- SwiGLU FeedForward -----------------
