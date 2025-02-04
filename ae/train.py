@@ -16,7 +16,7 @@ from jax.sharding import PartitionSpec as P
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-from ae.sharding import DEFAULT_RULES, with_sharding_constraint
+from sharding import DEFAULT_RULES, with_sharding_constraint
 from model import LM  # импорт модели с аннотациями
 from tqdm import tqdm
 from sampler import Sampler  # ваша функция сэмплирования
