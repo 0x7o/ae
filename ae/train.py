@@ -1,6 +1,5 @@
 import os
 import json
-from functools import partial
 
 import wandb
 
@@ -77,14 +76,15 @@ class Trainer:
 
         self.optim = None
 
-    def init_model(self, d_model, n_heads, n_layers, vocab_size, seq_len):
+    def init_model(self, d_model, query_heads, kv_heads, n_layers, vocab_size, seq_len):
         model = LM(
             d_model=d_model,
-            n_heads=n_heads,
             n_layers=n_layers,
             vocab_size=vocab_size,
             seq_len=seq_len,
             dtype=self.dtype,
+            query_heads=query_heads,
+            kv_heads=kv_heads,
         )
         return model
 
@@ -142,9 +142,9 @@ class Trainer:
 
         scheduler = None
         total_steps = (
-            self.config["train"]["n_epochs"]
-            * len(tokenized_datasets[self.config["data"]["split"]])
-            // self.config["train"]["batch_size"]
+                self.config["train"]["n_epochs"]
+                * len(tokenized_datasets[self.config["data"]["split"]])
+                // self.config["train"]["batch_size"]
         )
 
         if self.config["train"].get("scheduler"):
@@ -195,7 +195,7 @@ class Trainer:
                 None,
                 None,
             ),
-            static_argnums=(0, ),
+            static_argnums=(0,),
         )
 
         def data_loader(dataset, batch_size, seq_len):

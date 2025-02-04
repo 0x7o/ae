@@ -1,17 +1,18 @@
+import jax
 import jax.numpy as jnp
 import flax.linen as nn
-from flax.linen.partitioning import param_with_axes
-from jax.sharding import PartitionSpec
-from einops import rearrange, repeat
+from einops import rearrange, einsum, repeat
+from typing import Optional
 
 
+# ---------- Вспомогательные функции позиционного кодирования ----------
 def create_mask(seq_len, dtype: jnp.dtype = jnp.float32):
     mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=dtype))
     return mask
 
 
 def fixed_pos_embedding(inv_freq, seq, dtype: jnp.dtype = jnp.float32):
-    sinusoid_inp = jnp.einsum("i , j -> i j", jnp.arange(seq, dtype=dtype), inv_freq)
+    sinusoid_inp = jnp.einsum("i,j->ij", jnp.arange(seq, dtype=dtype), inv_freq)
     sinusoid_inp = repeat(sinusoid_inp, "... d -> ... (d r)", r=2)
     return jnp.sin(sinusoid_inp), jnp.cos(sinusoid_inp)
 
@@ -28,52 +29,137 @@ def apply_rotary_pos_emb(x, sincos, dtype: jnp.dtype = jnp.float32):
     return (x * cos) + (rotate_every_two(x, dtype) * sin)
 
 
-class LayerNorm(nn.Module):
-    eps: float = 1e-5
+# ---------- RMSNorm ----------
+class RMSNorm(nn.Module):
+    eps: float = 1e-8
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(self, x):
-        mean = jnp.mean(x, axis=-1, keepdims=True, dtype=self.dtype)
-        mean_of_squares = jnp.mean(
-            jnp.square(x), axis=-1, keepdims=True, dtype=self.dtype
-        )
-        variance = mean_of_squares - jnp.square(mean)
-        inv = 1.0 / jnp.sqrt(variance + self.eps)
-        return inv * (x - mean)
+        # Вычисляем корень из среднего квадрата (RMS)
+        rms = jnp.sqrt(jnp.mean(jnp.square(x), axis=-1, keepdims=True) + self.eps)
+        scale = self.param("scale", nn.initializers.ones, (x.shape[-1],), self.dtype)
+        return x / rms * scale
 
 
-class SelfAttentionHead(nn.Module):
-    @nn.compact
-    def __call__(self, v, k, q, wi, mask=None):
-        q = q @ wi
-        k = k @ wi
-        v = v @ wi
-        attn_weights = jnp.matmul(q, jnp.swapaxes(k, -2, -1)) / jnp.sqrt(q.shape[-1])
-        if mask is not None:
-            attn_weights = jnp.where(mask, attn_weights, -1e10)
-        return q + (nn.softmax(attn_weights) @ v)
-
-
-class SelfAttention(nn.Module):
-    n_heads: int
+# ---------- SwiGLU FeedForward ----------
+class FeedForward(nn.Module):
     d_model: int
-    seq_len: int
+    ff_mult: int = 4
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, v, k, q, wi, mask=None):
-        heads = [SelfAttentionHead(name=f"head_{i}") for i in range(self.n_heads)]
-        outputs = [head(v, k, q, wi, mask) for head in heads]
-        out = nn.Dense(
-            self.d_model,
-            dtype=self.dtype,
-            kernel_init=nn.initializers.xavier_uniform(),
-            name="out",
-        )
-        return out(jnp.concatenate(outputs, axis=-1, dtype=self.dtype))
+    def __call__(self, x):
+        hidden_dim = self.d_model * self.ff_mult
+        # Проекция увеличивает размерность в 2 раза для формирования двух частей
+        x_proj = nn.Dense(hidden_dim * 2, dtype=self.dtype, name="wi")(x)
+        x1, x2 = jnp.split(x_proj, 2, axis=-1)
+        # SwiGLU: перемножаем x1 на swish(x2)
+        x_swiglu = nn.Dense(self.d_model, dtype=self.dtype, name="wo")(jax.nn.silu(x2) * x1)
+        return x_swiglu
 
 
+# ---------- Multihead GQA ----------
+class MultiheadGQA(nn.Module):
+    d_model: int
+    query_heads: int
+    kv_heads: int
+    dropout: float = 0.0  # dropout отключён
+    layer_norm: bool = True
+    layer_norm_eps: float = 1e-5
+    gamma_init: float = 1.0
+    dtype: jnp.dtype = jnp.float32
+
+    @nn.compact
+    def __call__(
+            self,
+            x,
+            is_causal: bool = False,
+            mask: Optional[jnp.ndarray] = None,
+            need_weights: bool = False,
+            average_attn_weights: bool = False,
+    ):
+        # x: (batch, seq, d_model)
+        b, n, _ = x.shape
+        head_dim = self.d_model // self.query_heads
+        kv_embed_dim = head_dim * self.kv_heads  # размерность ключа/значения
+
+        # Проекции для запросов, ключей и значений.
+        q = nn.Dense(self.d_model, dtype=self.dtype, name="q_proj")(x)  # (b, n, d_model)
+        k = nn.Dense(kv_embed_dim, dtype=self.dtype, name="k_proj")(x)  # (b, n, kv_embed_dim)
+        v = nn.Dense(kv_embed_dim, dtype=self.dtype, name="v_proj")(x)  # (b, n, kv_embed_dim)
+
+        # Разбиваем по головам.
+        q = rearrange(q, "b n (h d) -> b n h d", h=self.query_heads)  # (b, n, query_heads, head_dim)
+        k = rearrange(k, "b n (h d) -> b n h d", h=self.kv_heads)  # (b, n, kv_heads, head_dim)
+        v = rearrange(v, "b n (h d) -> b n h d", h=self.kv_heads)  # (b, n, kv_heads, head_dim)
+
+        # Группировка запросов: число групп = query_heads // kv_heads.
+        num_head_groups = self.query_heads // self.kv_heads
+        # Перестраиваем q: (b, n, (g * h), d) -> (b, g, h, n, d),
+        # где h == kv_heads и g == num_head_groups.
+        q_grouped = rearrange(q, "b n (g h) d -> b g h n d", g=num_head_groups)
+
+        # Отладочный вывод форм
+        print("q shape:", q.shape)  # (1, 512, 8, 64)
+        print("q_grouped shape:", q_grouped.shape)  # (1, 4, 2, 512, 64)
+        print("k shape:", k.shape)  # (1, 512, 2, 64)
+        print("v shape:", v.shape)  # (1, 512, 2, 64)
+
+        # Масштабирование
+        scale = head_dim ** 0.5
+        q_grouped = q_grouped / scale
+
+        # Используем разные обозначения для длины последовательностей:
+        # nq для запросов, nk для ключей.
+        try:
+            attn_logits = einsum(q_grouped, k, "b g h nq d, b nk h d -> b g h nq nk")
+        except Exception as e:
+            print("Ошибка при выполнении einsum для attn_logits:")
+            print("  q_grouped shape:", q_grouped.shape)
+            print("  k shape:", k.shape)
+            raise e
+
+        # Если стоит каузальная маска — блокируем будущие токены.
+        if is_causal:
+            causal_mask = jnp.tril(jnp.ones((n, n), dtype=bool))
+            # Расширяем оси: (1, 1, 1, nq, nk)
+            attn_logits = jnp.where(causal_mask[None, None, None, :, :], attn_logits, -1e10)
+        if mask is not None:
+            # Обрабатываем маску в зависимости от числа её измерений.
+            if mask.ndim == 2:
+                # Маска имеет форму (nq, nk)
+                mask_expanded = mask[None, None, None, :, :]
+            elif mask.ndim == 3:
+                # Маска имеет форму (b, nq, nk)
+                mask_expanded = mask[:, None, None, :, :]
+            else:
+                raise ValueError(f"Неподдерживаемая размерность маски: {mask.ndim}")
+            attn_logits = jnp.where(mask_expanded, attn_logits, -1e10)
+
+        attn = nn.softmax(attn_logits, axis=-1)
+        # Вычисляем выходное представление: суммируем по оси ключей (nk).
+        out_grouped = einsum(attn, v, "b g h nq nk, b nk h d -> b g h nq d")
+        # Обратно объединяем группы и write-головы:
+        out = rearrange(out_grouped, "b g h nq d -> b nq (g h d)")
+        # Теперь out имеет форму (b, nq, query_heads * head_dim) == (b, n, d_model).
+
+        # Применяем layer norm перед финальной проекцией.
+        if self.layer_norm:
+            out = nn.LayerNorm(epsilon=self.layer_norm_eps, dtype=self.dtype, name="layer_norm")(out)
+        # Финальная линейная проекция для сведения размерности к d_model.
+        out = nn.Dense(self.d_model, dtype=self.dtype, name="out_proj")(out)
+
+        attn_weights = None
+        if need_weights:
+            # Приводим веса внимания к форме (b, nq, nk, query_heads) — объединяем группы и write-головы.
+            attn_weights = rearrange(attn, "b g h nq nk -> b nq nk (g h)")
+            if average_attn_weights:
+                attn_weights = jnp.mean(attn_weights, axis=1)
+        return out, attn_weights
+
+
+# ---------- Позиционное кодирование ----------
 class PositionEncoding(nn.Module):
     d_model: int
     dtype: jnp.dtype = jnp.float32
@@ -81,139 +167,105 @@ class PositionEncoding(nn.Module):
     @nn.compact
     def __call__(self, x):
         seq_len = x.shape[1]
-        inv_freq = 1.0 / (
-            10000 ** (jnp.arange(0, self.d_model, 2, dtype=self.dtype) / self.d_model)
-        )
+        inv_freq = 1.0 / (10000 ** (jnp.arange(0, self.d_model, 2, dtype=self.dtype) / self.d_model))
         pos_enc = fixed_pos_embedding(inv_freq, seq_len, dtype=self.dtype)
         return apply_rotary_pos_emb(x, pos_enc, dtype=self.dtype)
 
 
-class FeedForward(nn.Module):
-    @nn.compact
-    def __call__(self, x, wi):
-        x = nn.swish(x @ wi)
-        x = x @ wi
-        return x
-
-
+# ---------- Transformer Block ----------
 class Block(nn.Module):
     d_model: int
-    n_heads: int
     seq_len: int
+    query_heads: int
+    kv_heads: int
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, x, mask=None):
-        attention = SelfAttention(
-            n_heads=self.n_heads,
+    def __call__(self, x, mask=None, is_causal: bool = False):
+        # Модуль внимания GQA.
+        attn_module = MultiheadGQA(
             d_model=self.d_model,
-            seq_len=self.seq_len,
+            query_heads=self.query_heads,
+            kv_heads=self.kv_heads,
+            dropout=0.0,
+            layer_norm=True,
             dtype=self.dtype,
-            name="attention",
         )
-        norm = LayerNorm(dtype=self.dtype, name="norm")
-        wi = self.param(
-            "wi",
-            nn.initializers.xavier_uniform(),
-            (self.d_model, self.d_model),
-        )
-        ff = FeedForward(name="ff")
-
-        x = attention(x, x, x, wi, mask)
-        x = norm(x)
-        x = ff(x, wi)
-        return x
+        # Применяем GQA. (Если маска нужна — она передаётся в модуль)
+        x_attn, _ = attn_module(x, is_causal=is_causal, mask=mask)
+        # Применяем остаточное соединение можно добавить при необходимости.
+        # Далее нормализация RMSNorm (или можно заменить на другую, если требуется).
+        x_norm = RMSNorm(dtype=self.dtype, name="rmsnorm")(x_attn)
+        # FeedForward с SwiGLU.
+        ff = FeedForward(d_model=self.d_model, dtype=self.dtype, name="ff")
+        x_ff = ff(x_norm)
+        return x_ff
 
 
+# ---------- Языковая модель (LM) ----------
 class LM(nn.Module):
     d_model: int
-    n_heads: int
     n_layers: int
+    query_heads: int
+    kv_heads: int
     vocab_size: int
     seq_len: int
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, is_causal: bool = False):
+        # Создаём маску (например, для каузальной модели)
         mask = create_mask(x.shape[-1], dtype=self.dtype)
 
+        # Инициализация эмбеддингов с partitioning (если требуется)
         def w_e_init(key, shape, dtype=self.dtype):
-            return param_with_axes(
-                "w_e",
-                nn.initializers.normal(stddev=0.02),
-                (self.vocab_size, self.d_model),
-                axes=("vocab", "embed"),
-            )
+            return nn.initializers.normal(stddev=0.02)(key, shape, dtype)
 
-        p_e = PositionEncoding(d_model=self.d_model, dtype=self.dtype, name="p_e")
+        embed = nn.Embed(
+            num_embeddings=self.vocab_size,
+            features=self.d_model,
+            embedding_init=w_e_init,
+            dtype=self.dtype,
+            name="embed",
+        )
+        x = embed(x)  # (batch, seq, d_model)
+        # Применяем позиционное кодирование с rotary embeddings.
+        x = PositionEncoding(d_model=self.d_model, dtype=self.dtype, name="p_e")(x)
 
-        def out_init(key, shape, dtype=self.dtype):
-            return param_with_axes(
-                "out",
-                nn.initializers.xavier_uniform(),
-                (self.d_model, self.vocab_size),
-                axes=("embed", "vocab"),
-            )
-
-        x = nn.Embed(
-            self.vocab_size, self.d_model, dtype=self.dtype, embedding_init=w_e_init
-        )(x)
-        x = p_e(x)
-
+        # Проход через N блоков Transformer.
         for i in range(self.n_layers):
-            block = Block(
+            x = Block(
                 d_model=self.d_model,
-                n_heads=self.n_heads,
                 seq_len=self.seq_len,
+                query_heads=self.query_heads,
+                kv_heads=self.kv_heads,
                 dtype=self.dtype,
                 name=f"block_{i}",
-            )
-            x = block(x, mask)
+            )(x, mask=mask, is_causal=is_causal)
 
+        # Финальная линейная проекция для получения распределения по словарю.
         x = nn.Dense(
             self.vocab_size,
             dtype=self.dtype,
-            kernel_init=out_init,
             name="out",
+            kernel_init=nn.initializers.xavier_uniform(),
         )(x)
         return x
 
-    def get_partitioning(self):
-        return {
-            "params": {
-                "w_e": PartitionSpec("vocab", "embed"),
-                "out": {
-                    "kernel": PartitionSpec("embed", "vocab"),
-                    "bias": PartitionSpec("vocab"),
-                },
-                "p_e": {
-                    "scale": PartitionSpec("embed"),
-                    "bias": PartitionSpec("embed"),
-                },
-                **{
-                    f"block_{i}": {
-                        "attention": {
-                            "out": {
-                                "kernel": PartitionSpec("embed", "embed"),
-                                "bias": PartitionSpec("embed"),
-                            },
-                            **{
-                                f"head_{j}": {
-                                    "kernel": PartitionSpec("embed", "embed"),
-                                    "bias": PartitionSpec("embed"),
-                                }
-                                for j in range(self.n_heads)
-                            },
-                        },
-                        "norm": {
-                            "scale": PartitionSpec("embed"),
-                            "bias": PartitionSpec("embed"),
-                        },
-                        "ff": {
-                            "wi": PartitionSpec("embed", "embed"),
-                        },
-                    }
-                    for i in range(self.n_layers)
-                },
-            }
-        }
+
+# ---------- Пример инициализации модели ----------
+if __name__ == "__main__":
+    import jax.random
+
+    # Параметры модели: d_model=512, 6 слоёв, 8 query-голов, 2 kv-головы, vocab_size=1000, seq_len=512.
+    model = LM(
+        d_model=512,
+        n_layers=6,
+        query_heads=8,
+        kv_heads=2,
+        vocab_size=1000,
+        seq_len=512,
+    )
+    dummy_input = jnp.ones((1, 512), dtype=jnp.int32)
+    params = model.init(jax.random.PRNGKey(0), dummy_input)
+    print(params)
