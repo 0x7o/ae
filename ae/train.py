@@ -34,20 +34,20 @@ class Trainer:
             raise ValueError("Invalid dtype")
 
         # Создаём device mesh с тремя осями: data, model, tensor.
+        self.model = self.init_model(**config["model"])
+
+        # Создаём device mesh
         self.devices = mesh_utils.create_device_mesh((2, 2, 2))
         print("Devices: ", self.devices)
         self.mesh = Mesh(devices=self.devices, axis_names=("data", "model", "tensor"))
 
-        # Функция инициализации модели.
+        # Теперь определяем функцию инициализации, которая использует self.model
         def init_fn(rng, x):
             return self.model.init(rng, x)
 
         # Используем pjit для инициализации параметров.
-        # Поскольку RNG не шардируем, for RNG используем in_shardings = None.
-        # Для входного батча шардируем по оси "data".
-        # Выход (параметры) шардируем по осям ("model", "tensor").
         with self.mesh:
-            # Изменяем форму входного массива с (1, seq_len) на (2, seq_len)
+            # Здесь входной батч изменён на форму (2, seq_len), чтобы удовлетворять требованиям шардирования
             dummy_input = jnp.ones((2, self.config["model"]["seq_len"]), dtype=jnp.int32)
             self.params = pjit(
                 init_fn,
