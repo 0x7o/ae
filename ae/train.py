@@ -47,11 +47,13 @@ class Trainer:
         # Для входного батча шардируем по оси "data".
         # Выход (параметры) шардируем по осям ("model", "tensor").
         with self.mesh:
+            # Изменяем форму входного массива с (1, seq_len) на (2, seq_len)
+            dummy_input = jnp.ones((2, self.config["model"]["seq_len"]), dtype=jnp.int32)
             self.params = pjit(
                 init_fn,
                 in_shardings=(None, PartitionSpec("data", None)),
                 out_shardings=PartitionSpec("model", "tensor"),
-            )(jax.random.PRNGKey(0), jnp.ones((1, self.config["model"]["seq_len"]), dtype=jnp.int32))
+            )(jax.random.PRNGKey(0), dummy_input)
 
         # Data sharding для входных батчей – шардируем по оси "data".
         self.data_sharding = NamedSharding(self.mesh, PartitionSpec("data", None))
