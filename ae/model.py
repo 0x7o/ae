@@ -1,18 +1,21 @@
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
-from flax.linen.partitioning import param_with_axes  # для аннотаций параметров
 from einops import rearrange, einsum, repeat
 from typing import Optional
+from functools import partial
+
 
 # ----------------- Вспомогательные функции позиционного кодирования -----------------
 def create_mask(seq_len, dtype: jnp.dtype = jnp.float32):
     return jnp.tril(jnp.ones((seq_len, seq_len), dtype=dtype))
 
+
 def fixed_pos_embedding(inv_freq, seq, dtype: jnp.dtype = jnp.float32):
     sinusoid_inp = jnp.einsum("i,j->ij", jnp.arange(seq, dtype=dtype), inv_freq)
     sinusoid_inp = repeat(sinusoid_inp, "... d -> ... (d r)", r=2)
     return jnp.sin(sinusoid_inp), jnp.cos(sinusoid_inp)
+
 
 def rotate_every_two(x, dtype: jnp.dtype = jnp.float32):
     x = rearrange(x, "... (d r) -> ... d r", r=2)
@@ -20,9 +23,11 @@ def rotate_every_two(x, dtype: jnp.dtype = jnp.float32):
     x = jnp.stack((-x2, x1), axis=-1, dtype=dtype)
     return rearrange(x, "... d r -> ... (d r)")
 
+
 def apply_rotary_pos_emb(x, sincos, dtype: jnp.dtype = jnp.float32):
     sin, cos = sincos
     return x * cos + rotate_every_two(x, dtype) * sin
+
 
 # ----------------- RMSNorm -----------------
 class RMSNorm(nn.Module):
@@ -32,11 +37,9 @@ class RMSNorm(nn.Module):
     @nn.compact
     def __call__(self, x):
         rms = jnp.sqrt(jnp.mean(x ** 2, axis=-1, keepdims=True) + self.eps)
-        # Вызываем param_with_axes напрямую, а не через self.
-        scale = param_with_axes(
-            "scale", nn.initializers.ones, (x.shape[-1],), self.dtype, axes=("embed",)
-        )
+        scale = self.param('scale', nn.initializers.ones, (x.shape[-1],))
         return x / rms * scale
+
 
 # ----------------- SwiGLU FeedForward -----------------
 class FeedForward(nn.Module):
@@ -47,22 +50,21 @@ class FeedForward(nn.Module):
     @nn.compact
     def __call__(self, x):
         hidden_dim = self.d_model * self.ff_mult
-
-        def create_dense(features, name):
-            return nn.Dense(
-                features,
-                dtype=self.dtype,
-                name=name,
-                kernel_init=nn.initializers.xavier_uniform(),
-                param_axes={"kernel": ("embed", "ff"), "bias": ("ff",)},
-                kernel_axes=("embed", "ff"),
-                bias_axes=("ff",)
-            )
-
-        x_proj = create_dense(hidden_dim * 2, "wi")(x)
+        x_proj = nn.Dense(
+            hidden_dim * 2,
+            dtype=self.dtype,
+            kernel_init=nn.initializers.xavier_uniform(),
+            name='wi'
+        )(x)
         x1, x2 = jnp.split(x_proj, 2, axis=-1)
-        x_swiglu = create_dense(self.d_model, "wo")(jax.nn.silu(x2) * x1)
+        x_swiglu = nn.Dense(
+            self.d_model,
+            dtype=self.dtype,
+            kernel_init=nn.initializers.xavier_uniform(),
+            name='wo'
+        )(jax.nn.silu(x2) * x1)
         return x_swiglu
+
 
 # ----------------- Multihead GQA -----------------
 class MultiheadGQA(nn.Module):
@@ -82,30 +84,34 @@ class MultiheadGQA(nn.Module):
         head_dim = self.d_model // self.query_heads
         kv_embed_dim = head_dim * self.kv_heads
 
-        def create_dense(features, name):
-            return nn.Dense(
-                features,
-                dtype=self.dtype,
-                name=name,
-                kernel_init=nn.initializers.xavier_uniform(),
-                # Annotate kernel with both model and tensor axes
-                param_axes={"kernel": ("embed", "kv"), "bias": ("kv",)},
-                kernel_axes=("embed", "kv"),
-                # For bias, use only one axis
-                bias_axes=("kv",)
-            )
+        q = nn.Dense(
+            self.d_model,
+            dtype=self.dtype,
+            kernel_init=nn.initializers.xavier_uniform(),
+            name='q_proj'
+        )(x)
+        k = nn.Dense(
+            kv_embed_dim,
+            dtype=self.dtype,
+            kernel_init=nn.initializers.xavier_uniform(),
+            name='k_proj'
+        )(x)
+        v = nn.Dense(
+            kv_embed_dim,
+            dtype=self.dtype,
+            kernel_init=nn.initializers.xavier_uniform(),
+            name='v_proj'
+        )(x)
 
-        # Use the modified Dense creation for projections
-        q = create_dense(self.d_model, "q_proj")(x)
-        k = create_dense(kv_embed_dim, "k_proj")(x)
-        v = create_dense(kv_embed_dim, "v_proj")(x)
+        q = rearrange(q, "b n (h d) -> b n h d", h=self.query_heads)
+        k = rearrange(k, "b n (h d) -> b n h d", h=self.kv_heads)
+        v = rearrange(v, "b n (h d) -> b n h d", h=self.kv_heads)
 
         num_head_groups = self.query_heads // self.kv_heads
         q_grouped = rearrange(q, "b n (g h) d -> b g h n d", g=num_head_groups)
         scale = head_dim ** 0.5
         q_grouped = q_grouped / scale
 
-        # Для различения осей длины последовательности: nq для запросов, nk для ключей.
         attn_logits = einsum(q_grouped, k, "b g h nq d, b nk h d -> b g h nq nk")
         if is_causal:
             causal_mask = jnp.tril(jnp.ones((n, n), dtype=bool))
@@ -122,14 +128,17 @@ class MultiheadGQA(nn.Module):
         attn = nn.softmax(attn_logits, axis=-1)
         out_grouped = einsum(attn, v, "b g h nq nk, b nk h d -> b g h nq d")
         out = rearrange(out_grouped, "b g h nq d -> b nq (g h d)")
+
         if self.layer_norm:
-            out = nn.LayerNorm(epsilon=self.layer_norm_eps, dtype=self.dtype, name="layer_norm")(out)
+            out = nn.LayerNorm(epsilon=self.layer_norm_eps, dtype=self.dtype)(out)
+
         out = nn.Dense(
             self.d_model,
             dtype=self.dtype,
-            name="out_proj",
             kernel_init=nn.initializers.xavier_uniform(),
+            name='out_proj'
         )(out)
+
         attn_weights = None
         if need_weights:
             attn_weights = rearrange(attn, "b g h nq nk -> b nq nk (g h)")
@@ -137,16 +146,19 @@ class MultiheadGQA(nn.Module):
                 attn_weights = jnp.mean(attn_weights, axis=1)
         return out, attn_weights
 
+
 # ----------------- Позиционное кодирование -----------------
 class PositionEncoding(nn.Module):
     d_model: int
     dtype: jnp.dtype = jnp.float32
+
     @nn.compact
     def __call__(self, x):
         seq_len = x.shape[1]
         inv_freq = 1.0 / (10000 ** (jnp.arange(0, self.d_model, 2, dtype=self.dtype) / self.d_model))
         pos_enc = fixed_pos_embedding(inv_freq, seq_len, dtype=self.dtype)
         return apply_rotary_pos_emb(x, pos_enc, dtype=self.dtype)
+
 
 # ----------------- Transformer Block -----------------
 class Block(nn.Module):
@@ -155,6 +167,7 @@ class Block(nn.Module):
     query_heads: int
     kv_heads: int
     dtype: jnp.dtype = jnp.float32
+
     @nn.compact
     def __call__(self, x, mask=None, is_causal: bool = False):
         attn_module = MultiheadGQA(
@@ -163,13 +176,14 @@ class Block(nn.Module):
             kv_heads=self.kv_heads,
             dropout=0.0,
             layer_norm=True,
-            dtype=self.dtype,
+            dtype=self.dtype
         )
         x_attn, _ = attn_module(x, is_causal=is_causal, mask=mask)
-        x_norm = RMSNorm(dtype=self.dtype, name="rmsnorm")(x_attn)
-        ff = FeedForward(d_model=self.d_model, dtype=self.dtype, name="ff")
+        x_norm = RMSNorm(dtype=self.dtype)(x_attn)
+        ff = FeedForward(d_model=self.d_model, dtype=self.dtype)
         x_ff = ff(x_norm)
         return x_ff
+
 
 # ----------------- Языковая модель (LM) -----------------
 class LM(nn.Module):
@@ -185,18 +199,14 @@ class LM(nn.Module):
     def __call__(self, x, is_causal: bool = False):
         mask = create_mask(x.shape[-1], dtype=self.dtype)
 
-        embed = nn.Embed(
+        x = nn.Embed(
             num_embeddings=self.vocab_size,
             features=self.d_model,
-            embedding_init=nn.initializers.normal(stddev=0.02),
             dtype=self.dtype,
-            param_axes={"embedding": ("vocab", "embed")},
-            embedding_axes=("vocab", "embed"),
-            name="embed",
-        )
+            name='embed'
+        )(x)
 
-        x = embed(x)
-        x = PositionEncoding(d_model=self.d_model, dtype=self.dtype, name="p_e")(x)
+        x = PositionEncoding(d_model=self.d_model, dtype=self.dtype)(x)
 
         for i in range(self.n_layers):
             x = Block(
@@ -205,20 +215,17 @@ class LM(nn.Module):
                 query_heads=self.query_heads,
                 kv_heads=self.kv_heads,
                 dtype=self.dtype,
-                name=f"block_{i}",
+                name=f'block_{i}'
             )(x, mask=mask, is_causal=is_causal)
 
-        output_dense = nn.Dense(
+        x = nn.Dense(
             self.vocab_size,
             dtype=self.dtype,
-            name="out",
             kernel_init=nn.initializers.xavier_uniform(),
-            param_axes={"kernel": ("embed", "vocab"), "bias": ("vocab",)},
-            kernel_axes=("embed", "vocab"),
-            bias_axes=("vocab",)
-        )
+            name='out'
+        )(x)
 
-        return output_dense(x)
+        return x
 
 # ----------------- Пример инициализации модели -----------------
 if __name__ == "__main__":

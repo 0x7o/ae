@@ -34,26 +34,27 @@ class Trainer:
         # Инициализируем модель
         self.model = self.init_model(**config["model"])
 
-        # Создаем dummy input и получаем структуру параметров
-        dummy_input = jnp.ones((2, config["model"]["seq_len"]), dtype=jnp.int32)
-        variables = self.model.init(jax.random.PRNGKey(0), dummy_input)
-
-        # Получаем шардинг для всего дерева параметров
-        params_sharding = get_sharding_from_rules(variables['params'], DEFAULT_RULES)
-
-        def init_fn(rng, x):
-            return self.model.init(rng, x)
-
         with self.mesh:
-            # Применяем pjit с корректным шардингом
-            init_fn = pjit(
-                init_fn,
-                in_shardings=(None, P("data", None)),
-                out_shardings={"params": params_sharding}
-            )
-            self.params = init_fn(jax.random.PRNGKey(0), dummy_input)
+            # Создаем dummy input для инициализации
+            dummy_input = jnp.ones((2, config["model"]["seq_len"]), dtype=jnp.int32)
 
-        print("Model initialized with sharding rules")
+            def init_with_constraints(key, x):
+                variables = self.model.init(key, x)
+                return jax.tree_map(
+                    lambda x: jax.lax.with_sharding_constraint(x, P("data", "model")),
+                    variables
+                )
+
+            init_fn = pjit(
+                init_with_constraints,
+                in_shardings=(None, P("data", None)),
+                out_shardings=None
+            )
+
+            self.variables = init_fn(jax.random.PRNGKey(0), dummy_input)
+            self.params = self.variables['params']
+
+        print("Model initialized with sharding constraints")
         self.data_sharding = NamedSharding(self.mesh, PartitionSpec("data", None))
         self.dataset = load_dataset(config["data"]["name"])
         self.tokenizer = AutoTokenizer.from_pretrained(config["data"]["tokenizer"])
